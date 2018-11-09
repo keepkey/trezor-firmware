@@ -61,6 +61,9 @@ void hasher_Init(Hasher *hasher, HasherType type) {
 	case HASHER_SAPLING_PREIMAGE:
 		blake2b_InitPersonal(&hasher->ctx.blake2b, 32, "ZcashSigHash\xbb\x09\xb8\x76", 16);  // BRANCH_ID = 0x76b809bb / Sapling
 		break;
+	case HASHER_RIPEMD:
+		ripemd160_Init(&hasher->ctx.ripemd160);
+		break;
 	}
 }
 
@@ -95,6 +98,9 @@ void hasher_Update(Hasher *hasher, const uint8_t *data, size_t length) {
 	case HASHER_OVERWINTER_PREIMAGE:
 	case HASHER_SAPLING_PREIMAGE:
 		blake2b_Update(&hasher->ctx.blake2b, data, length);
+		break;
+	case HASHER_RIPEMD:
+		ripemd160_Update(&hasher->ctx.ripemd160, data, length);
 		break;
 	}
 }
@@ -140,6 +146,9 @@ void hasher_Final(Hasher *hasher, uint8_t hash[HASHER_DIGEST_LENGTH]) {
 	case HASHER_OVERWINTER_PREIMAGE:
 	case HASHER_SAPLING_PREIMAGE:
 		blake2b_Final(&hasher->ctx.blake2b, hash, 32);
+		break;
+	case HASHER_RIPEMD:
+		ripemd160_Final(&hasher->ctx.ripemd160, hash);
 		break;
 	}
 }

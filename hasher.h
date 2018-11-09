@@ -31,6 +31,7 @@
 #include "blake256.h"
 #include "groestl.h"
 #include "blake2b.h"
+#include "ripemd160.h"
 
 #define HASHER_DIGEST_LENGTH 32
 
@@ -55,6 +56,8 @@ typedef enum {
     HASHER_OVERWINTER_OUTPUTS,
     HASHER_OVERWINTER_PREIMAGE,
     HASHER_SAPLING_PREIMAGE,
+
+    HASHER_RIPEMD,
 } HasherType;
 
 typedef struct {
@@ -66,6 +69,7 @@ typedef struct {
         BLAKE256_CTX blake;     // for HASHER_BLAKE{,D}
         GROESTL512_CTX groestl; // for HASHER_GROESTLD_TRUNC
         BLAKE2B_CTX blake2b;    // for HASHER_OVERWINTER_*, HASHER_SAPLING_*
+        RIPEMD160_CTX ripemd160;// for HASHER_RIPEMD
     } ctx;
 } Hasher;
 
