@@ -63,6 +63,7 @@ SRCS  += groestl.c
 SRCS  += chacha20poly1305/chacha20poly1305.c chacha20poly1305/chacha_merged.c chacha20poly1305/poly1305-donna.c chacha20poly1305/rfc7539.c
 SRCS  += rc4.c
 SRCS  += nem.c
+SRCS  += nano.c
 SRCS  += segwit_addr.c cash_addr.c
 SRCS  += memzero.c
 

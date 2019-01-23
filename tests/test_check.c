@@ -5085,6 +5085,8 @@ Suite *test_suite(void)
 	tc = tcase_create("nano");
 	tcase_add_test(tc, test_bip32_nano_vector_1);
 	tcase_add_test(tc, test_base32_nano);
+	tcase_add_test(tc, test_nano_get_address);
+	tcase_add_test(tc, test_nano_validate_address);
 	suite_add_tcase(s, tc);
 #endif
 

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2017 Saleem Rashid
+ * Copyright (c) 2019 Mart Roosmaa
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the "Software"),
@@ -20,22 +20,33 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __BASE32_H__
-#define __BASE32_H__
+#ifndef __NANO_H__
+#define __NANO_H__
+
+#if USE_NANO
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-extern const char *BASE32_ALPHABET_RFC4648;
+#include "ed25519-donna/ed25519.h"
 
-char *base32_encode(const uint8_t *in, size_t inlen, char *out, size_t outlen, const char *alphabet);
-void base32_encode_unsafe(const uint8_t *in, size_t inlen, uint8_t *out);
+extern const char *BASE32_ALPHABET_NANO;
 
-uint8_t *base32_decode(const char *in, size_t inlen, uint8_t *out, size_t outlen, const char *alphabet);
-bool base32_decode_unsafe(const uint8_t *in, size_t inlen, uint8_t *out, const char *alphabet);
+size_t nano_get_address(
+    const ed25519_public_key public_key,
+    const char *prefix,
+    const size_t prefix_len,
+    char *out,
+    size_t out_len);
 
-size_t base32_encoded_length(size_t inlen);
-size_t base32_decoded_length(size_t inlen);
+bool nano_validate_address(
+    const char *prefix,
+    const size_t prefix_len,
+    const char *address,
+    const size_t address_len,
+    ed25519_public_key out_public_key);
+
+#endif
 
 #endif
