@@ -18,4 +18,22 @@ START_TEST(test_bip32_nano_vector_1)
     ck_assert_mem_eq(node.public_key+1, fromhex("5b65b0e8173ee0802c2c3e6c9080d1a16b06de1176c938a924f58670904e82c4"), 32);
 }
 END_TEST
+
+START_TEST(test_base32_nano)
+{
+    const char *in_hex = "0000005114aad86a390897d2a91b33b931b3a59a7df9e63eb3694f9430122f5622ae505c6ff6b58e";
+    const char *out = "11111nanode8ngaakzbck8smq6ru9bethqwyehomf79sae1k7xd47dkidjqzffeg";
+
+    uint8_t in[40];
+    memcpy(in, fromhex(in_hex), sizeof(in));
+
+    char buffer[96];
+
+    ck_assert(base32_encode(in, sizeof(in), buffer, sizeof(buffer), BASE32_ALPHABET_NANO) != NULL);
+    ck_assert_str_eq(buffer, out);
+
+    ck_assert(base32_decode(out, strlen(out), (uint8_t *)buffer, sizeof(buffer), BASE32_ALPHABET_NANO) != NULL);
+    ck_assert_mem_eq(buffer, in, sizeof(in));
+}
+END_TEST
 #endif

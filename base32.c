@@ -26,6 +26,10 @@
 
 const char *BASE32_ALPHABET_RFC4648 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789";
 
+#if USE_NANO
+const char *BASE32_ALPHABET_NANO = "13456789abcdefghijkmnopqrstuwxyz";
+#endif
+
 static inline void base32_5to8(const uint8_t *in, uint8_t length, uint8_t *out);
 static inline bool base32_8to5(const uint8_t *in, uint8_t length, uint8_t *out, const char *alphabet);
 static inline void base32_8to5_raw(const uint8_t *in, uint8_t length, uint8_t *out);
