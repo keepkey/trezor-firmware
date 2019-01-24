@@ -25,27 +25,28 @@
 
 #ifndef RAND_PLATFORM_INDEPENDENT
 
-
-#pragma message("NOT SUITABLE FOR PRODUCTION USE!")
+#pragma message("NOT SUITABLE FOR PRODUCTION USE! Replace random32() function with your own secure code.")
 
 // The following code is not supposed to be used in a production environment.
 // It's included only to make the library testable.
 // The message above tries to prevent any accidental use outside of the test environment.
 //
-// You are supposed to replace the random32() function with your own secure code.
+// You are supposed to replace the random8() and random32() function with your own secure code.
 // There is also a possibility to replace the random_buffer() function as it is defined as a weak symbol.
 
-#include <stdio.h>
-#include <time.h>
+static uint32_t seed = 0;
+
+void random_reseed(const uint32_t value)
+{
+	seed = value;
+}
 
 uint32_t random32(void)
 {
-	static int initialized = 0;
-	if (!initialized) {
-		srand((unsigned)time(NULL));
-		initialized = 1;
-	}
-	return ((rand() & 0xFF) | ((rand() & 0xFF) << 8) | ((rand() & 0xFF) << 16) | ((uint32_t) (rand() & 0xFF) << 24));
+	// Linear congruential generator from Numerical Recipes
+	// https://en.wikipedia.org/wiki/Linear_congruential_generator
+	seed = 1664525 * seed + 1013904223;
+	return seed;
 }
 
 #endif /* RAND_PLATFORM_INDEPENDENT */
