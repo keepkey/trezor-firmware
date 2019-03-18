@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2016 Jochen Hoenicke
+ * Copyright (c) 2019 Mart Roosmaa
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the "Software"),
@@ -20,20 +20,33 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "curves.h"
+#ifndef __NANO_H__
+#define __NANO_H__
 
-const char SECP256K1_NAME[] = "secp256k1";
-const char SECP256K1_DECRED_NAME[] = "secp256k1-decred";
-const char SECP256K1_GROESTL_NAME[] = "secp256k1-groestl";
-const char SECP256K1_SMART_NAME[] = "secp256k1-smart";
-const char NIST256P1_NAME[] = "nist256p1";
-const char ED25519_NAME[] = "ed25519";
-const char ED25519_CARDANO_NAME[] = "ed25519 cardano seed";
 #if USE_NANO
-const char ED25519_BLAKE2B_NANO_NAME[] = "ed25519-blake2b-nano";
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "ed25519-donna/ed25519.h"
+
+extern const char *BASE32_ALPHABET_NANO;
+
+size_t nano_get_address(
+    const ed25519_public_key public_key,
+    const char *prefix,
+    const size_t prefix_len,
+    char *out,
+    size_t out_len);
+
+bool nano_validate_address(
+    const char *prefix,
+    const size_t prefix_len,
+    const char *address,
+    const size_t address_len,
+    ed25519_public_key out_public_key);
+
 #endif
-const char ED25519_SHA3_NAME[] = "ed25519-sha3";
-#if USE_KECCAK
-const char ED25519_KECCAK_NAME[] = "ed25519-keccak";
+
 #endif
-const char CURVE25519_NAME[] = "curve25519";

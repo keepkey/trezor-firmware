@@ -4810,6 +4810,10 @@ END_TEST
 #include "test_check_cardano.h"
 #endif
 
+#if USE_NANO
+#include "test_check_nano.h"
+#endif
+
 #if USE_MONERO
 #include "test_check_monero.h"
 #endif
@@ -5075,6 +5079,15 @@ Suite *test_suite(void)
 
 	tcase_add_test(tc, test_ed25519_cardano_sign_vectors);
 	suite_add_tcase(s,tc);
+#endif
+
+#if USE_NANO
+	tc = tcase_create("nano");
+	tcase_add_test(tc, test_bip32_nano_vector_1);
+	tcase_add_test(tc, test_base32_nano);
+	tcase_add_test(tc, test_nano_get_address);
+	tcase_add_test(tc, test_nano_validate_address);
+	suite_add_tcase(s, tc);
 #endif
 
 #if USE_MONERO
