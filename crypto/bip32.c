@@ -821,7 +821,7 @@ static int hdnode_serialize(const HDNode *node, uint32_t fingerprint,
     memcpy(node_data + 46, node->private_key, 32);
   }
   int ret = base58_encode_check(node_data, sizeof(node_data),
-                                node->curve->hasher_base58, str, strsize);
+                                node->curve->hasher_base58, str, strsize, NULL);
   memzero(node_data, sizeof(node_data));
   return ret;
 }
@@ -844,7 +844,7 @@ int hdnode_deserialize(const char *str, uint32_t version_public,
   memzero(node, sizeof(HDNode));
   node->curve = get_curve_by_name(curve);
   if (base58_decode_check(str, node->curve->hasher_base58, node_data,
-                          sizeof(node_data)) != sizeof(node_data)) {
+                          sizeof(node_data), NULL) != sizeof(node_data)) {
     return -1;
   }
   uint32_t version = read_be(node_data);

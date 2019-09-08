@@ -29,6 +29,8 @@
 #include "ripemd160.h"
 #include "sha2.h"
 
+#define B58_MAP_SIZE 128
+
 const char b58digits_ordered[] =
     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const int8_t b58digits_map[] = {
@@ -41,11 +43,32 @@ const int8_t b58digits_map[] = {
     49, 50, 51, 52, 53, 54, 55, 56, 57, -1, -1, -1, -1, -1,
 };
 
-bool b58tobin(void *bin, size_t *binszp, const char *b58) {
+bool b58tobin(void *bin, size_t *binszp, const char *b58, const char *digits) {
   size_t binsz = *binszp;
 
   if (binsz == 0) {
     return false;
+  }
+
+  const int8_t *digits_map = b58digits_map;
+  if (!digits || digits == b58digits_ordered) {
+    digits = b58digits_ordered;
+    digits_map = b58digits_map;
+  } else {
+    static const char *digits_cached = NULL;
+    static int8_t cache[B58_MAP_SIZE];
+    if (digits_cached != digits) {
+      for (int i = 0; i < B58_MAP_SIZE; i++) {
+        cache[i] = -1;
+      }
+      for (int i = 0; digits[i]; i++) {
+        if (B58_MAP_SIZE <= (uint8_t)digits[i])
+          return false;
+        cache[(int)digits[i]] = i;
+      }
+      digits_cached = digits;
+      digits_map = cache;
+    }
   }
 
   const unsigned char *b58u = (const unsigned char *)b58;
@@ -71,10 +94,10 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58) {
     if (b58u[i] & 0x80)
       // High-bit set on invalid digit
       return false;
-    if (b58digits_map[b58u[i]] == -1)
+    if (digits_map[b58u[i]] == -1)
       // Invalid base58 digit
       return false;
-    c = (unsigned)b58digits_map[b58u[i]];
+    c = (unsigned)digits_map[b58u[i]];
     for (j = outisz; j--;) {
       t = ((uint64_t)outi[j]) * 58 + c;
       c = (t & 0x3f00000000) >> 32;
@@ -129,7 +152,7 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58) {
 }
 
 int b58check(const void *bin, size_t binsz, HasherType hasher_type,
-             const char *base58str) {
+             const char *base58str, const char *digits) {
   unsigned char buf[32];
   const uint8_t *binc = bin;
   unsigned i;
@@ -139,14 +162,18 @@ int b58check(const void *bin, size_t binsz, HasherType hasher_type,
 
   // Check number of zeros is correct AFTER verifying checksum (to avoid
   // possibility of accessing base58str beyond the end)
-  for (i = 0; binc[i] == '\0' && base58str[i] == '1'; ++i) {
+  for (i = 0; binc[i] == '\0' && base58str[i] == digits[0]; ++i) {
   }  // Just finding the end of zeros, nothing to do in loop
-  if (binc[i] == '\0' || base58str[i] == '1') return -3;
+  if (binc[i] == '\0' || base58str[i] == digits[0]) return -3;
 
   return binc[0];
 }
 
-bool b58enc(char *b58, size_t *b58sz, const void *data, size_t binsz) {
+bool b58enc(char *b58, size_t *b58sz, const void *data, size_t binsz, const char *digits) {
+  if (!digits) {
+    digits = b58digits_ordered;
+  }
+
   const uint8_t *bin = data;
   int carry;
   ssize_t i, j, high, zcount = 0;
@@ -174,9 +201,9 @@ bool b58enc(char *b58, size_t *b58sz, const void *data, size_t binsz) {
     return false;
   }
 
-  if (zcount) memset(b58, '1', zcount);
+  if (zcount) memset(b58, digits[0], zcount);
   for (i = zcount; j < (ssize_t)size; ++i, ++j)
-    b58[i] = b58digits_ordered[buf[j]];
+    b58[i] = digits[buf[j]];
   b58[i] = '\0';
   *b58sz = i + 1;
 
@@ -184,32 +211,39 @@ bool b58enc(char *b58, size_t *b58sz, const void *data, size_t binsz) {
 }
 
 int base58_encode_check(const uint8_t *data, int datalen,
-                        HasherType hasher_type, char *str, int strsize) {
+                        HasherType hasher_type, char *str, int strsize,
+                        const char *alphabet) {
   if (datalen > 128) {
     return 0;
+  }
+  if (!alphabet) {
+    alphabet = b58digits_ordered;
   }
   uint8_t buf[datalen + 32];
   uint8_t *hash = buf + datalen;
   memcpy(buf, data, datalen);
   hasher_Raw(hasher_type, data, datalen, hash);
   size_t res = strsize;
-  bool success = b58enc(str, &res, buf, datalen + 4);
+  bool success = b58enc(str, &res, buf, datalen + 4, alphabet);
   memzero(buf, sizeof(buf));
   return success ? res : 0;
 }
 
 int base58_decode_check(const char *str, HasherType hasher_type, uint8_t *data,
-                        int datalen) {
+                        int datalen, const char *alphabet) {
   if (datalen > 128) {
     return 0;
   }
+  if (!alphabet) {
+    alphabet = b58digits_ordered;
+  }
   uint8_t d[datalen + 4];
   size_t res = datalen + 4;
-  if (b58tobin(d, &res, str) != true) {
+  if (b58tobin(d, &res, str, alphabet) != true) {
     return 0;
   }
   uint8_t *nd = d + datalen + 4 - res;
-  if (b58check(nd, res, hasher_type, str) < 0) {
+  if (b58check(nd, res, hasher_type, str, alphabet) < 0) {
     return 0;
   }
   memcpy(data, nd, res - 4);
