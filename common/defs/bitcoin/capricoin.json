@@ -4,7 +4,7 @@
   "coin_label": "Capricoin",
   "website": "https://capricoin.org",
   "github": "https://github.com/Capricoinofficial/Capricoin",
-  "maintainer": "Tibor Arpas <tibor.arpas@infinit.sk>",
+  "maintainer": "Jozef Knaperek <jknaperek@gmail.com>",
   "curve_name": "secp256k1",
   "address_type": 28,
   "address_type_p2sh": 35,
@@ -42,6 +42,8 @@
     "https://blockbook3.capricoin.org",
     "https://blockbook4.capricoin.org"
   ],
+  "negative_fee": false,
   "cooldown": 100,
-  "consensus_branch_id": null
+  "consensus_branch_id": null,
+  "confidential_assets": null
 }

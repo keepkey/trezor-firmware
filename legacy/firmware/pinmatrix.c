@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -45,6 +45,12 @@ void pinmatrix_draw(const char *text) {
                      bmp_digits[k]);
     }
   }
+  for (int i = 0; i < 3; i++) {
+    // 36 is the maximum pixels used for a pin matrix pixel row
+    // but we use 56 pixels to add some extra
+    oledSCAInside(12 + i * (h + pad), 12 + i * (h + pad) + h - 1, 56, 38,
+                  OLED_WIDTH - 38);
+  }
   oledRefresh();
 }
 
@@ -58,7 +64,7 @@ void pinmatrix_start(const char *text) {
 }
 
 void pinmatrix_done(char *pin) {
-  int k, i = 0;
+  int i = 0, k = 0;
   while (pin && pin[i]) {
     k = pin[i] - '1';
     if (k >= 0 && k <= 8) {

@@ -2,7 +2,7 @@ from trezor import wire
 from trezor.messages import MessageType
 
 
-def boot():
+def boot() -> None:
     # only enable LoadDevice in debug builds
     if __debug__:
         wire.add(MessageType.LoadDevice, __name__, "load_device")
@@ -14,3 +14,4 @@ def boot():
     wire.add(MessageType.ApplyFlags, __name__, "apply_flags")
     wire.add(MessageType.ChangePin, __name__, "change_pin")
     wire.add(MessageType.SetU2FCounter, __name__, "set_u2f_counter")
+    wire.add(MessageType.SdProtect, __name__, "sd_protect")

@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2017 Saleem Rashid <trezor@saleemrashid.com>
  *
@@ -21,7 +21,7 @@
 
 uint32_t random32(void) {
   static uint32_t last = 0;
-  uint32_t new;
+  uint32_t new = 0;
 
   do {
     emulatorRandom(&new, sizeof(new));

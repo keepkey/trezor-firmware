@@ -1,0 +1,197 @@
+image: registry.gitlab.com/satoshilabs/trezor/trezor-firmware/environment
+
+.only_changes_core: &only_changes_core
+  only:
+    changes:
+      - ci/**/*
+      - common/**/*
+      - core/**/*
+      - crypto/**/*
+      - python/**/*
+      - storage/**/*
+      - tests/**/*
+      - tools/**/*
+      - vendor/**/*
+
+.only_changes_legacy: &only_changes_legacy
+  only:
+    changes:
+      - ci/**/*
+      - common/**/*
+      - crypto/**/*
+      - legacy/**/*
+      - python/**/*
+      - storage/**/*
+      - tests/**/*
+      - tools/**/*
+      - vendor/**/*
+
+
+# Core
+
+core unix unit test:
+  stage: test
+  <<: *only_changes_core
+  dependencies:
+    - core unix frozen regular build
+  script:
+    - cd core
+    - pipenv run make test
+
+core unix device test:
+  stage: test
+  <<: *only_changes_core
+  dependencies:
+    - core unix frozen regular build
+  script:
+    - cd core
+    - pipenv run make test_emu
+
+core unix btconly device test:
+  stage: test
+  <<: *only_changes_core
+  dependencies:
+    - core unix frozen btconly build
+  variables:
+    MICROPYTHON: "../build/unix/micropython-bitcoinonly"
+    TREZOR_PYTEST_SKIP_ALTCOINS: 1
+  script:
+    - cd core
+    - pipenv run make test_emu
+
+core unix monero test:
+  stage: test
+  <<: *only_changes_core
+  retry: 2  # see #405
+  dependencies:
+    - core unix frozen regular build
+  script:
+    - cd core
+    - pipenv run make test_emu_monero
+
+core unix u2f test:
+  stage: test
+  <<: *only_changes_core
+  retry: 2  # see #596
+  dependencies:
+    - core unix frozen regular build
+  script:
+    - make -C tests/fido_tests/u2f-tests-hid
+    - cd core
+    - pipenv run make test_emu_u2f
+
+core unix fido2 test:
+  stage: test
+  <<: *only_changes_core
+  dependencies:
+    - core unix frozen regular build
+  script:
+    - cd core
+    - pipenv run make test_emu_fido2
+
+core unix upgrade test:
+  stage: test
+  <<: *only_changes_core
+  dependencies:
+    - core unix frozen debug build
+  variables:
+    TREZOR_UPGRADE_TEST: "core"
+  script:
+    - tests/download_emulators.sh
+    - pipenv run pytest tests/upgrade_tests
+
+core mypy test:
+  stage: test
+  <<: *only_changes_core
+  dependencies: []  # no artifacts needed
+  script:
+    - cd core
+    - pipenv run mypy --version
+    - pipenv run make res  # needed for clean mypy
+    - pipenv run make mypy
+
+
+# Crypto
+
+crypto test:
+  stage: test
+  only:
+    changes:
+      - ci/**/*
+      - crypto/**/*
+  dependencies:
+    - crypto build
+  script:
+    - cd crypto
+    - ./tests/aestst
+    - ./tests/test_check
+    - ./tests/test_openssl 1000
+    - ITERS=10 pipenv run pytest tests
+    - CK_TIMEOUT_MULTIPLIER=20 valgrind -q --error-exitcode=1 ./tests/test_check
+
+
+# Legacy
+
+legacy emu test:
+  stage: test
+  <<: *only_changes_legacy
+  dependencies:
+    - legacy emu regular build
+  variables:
+    EMULATOR: "1"
+  script:
+    - cd legacy
+    - pipenv run script/test
+
+legacy emu btconly test:
+  stage: test
+  <<: *only_changes_legacy
+  dependencies:
+    - legacy emu btconly build
+  variables:
+    EMULATOR: "1"
+    EMULATOR_BINARY: "firmware/trezor-bitcoinonly.elf"
+    TREZOR_PYTEST_SKIP_ALTCOINS: 1
+  script:
+    - cd legacy
+    - pipenv run script/test
+
+legacy emu upgrade test:
+  stage: test
+  <<: *only_changes_legacy
+  dependencies:
+    - legacy emu regular build
+  variables:
+    TREZOR_UPGRADE_TEST: "legacy"
+  script:
+    - tests/download_emulators.sh
+    - pipenv run pytest tests/upgrade_tests
+
+
+# Python
+
+python test:
+  stage: test
+  only:
+    changes:
+      - ci/**/*
+      - common/**/*
+      - python/**/*
+  script:
+    - cd python
+    - pipenv run tox
+
+
+# Storage
+
+storage test:
+  stage: test
+  only:
+    changes:
+      - ci/**/*
+      - storage/**/*
+  dependencies: []
+  script:
+    - cd storage/tests
+    - pipenv run make build
+    - pipenv run make tests_all

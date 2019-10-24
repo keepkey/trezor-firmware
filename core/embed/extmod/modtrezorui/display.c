@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (c) SatoshiLabs
  *
@@ -16,6 +16,8 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+#define _GNU_SOURCE
 
 #include "font_bitmap.h"
 #include "inflate.h"
@@ -316,9 +318,9 @@ static void inflate_callback_loader(uint8_t byte, uint32_t pos,
 
 #endif
 
-void display_loader(uint16_t progress, int yoffset, uint16_t fgcolor,
-                    uint16_t bgcolor, const uint8_t *icon, uint32_t iconlen,
-                    uint16_t iconfgcolor) {
+void display_loader(uint16_t progress, bool indeterminate, int yoffset,
+                    uint16_t fgcolor, uint16_t bgcolor, const uint8_t *icon,
+                    uint32_t iconlen, uint16_t iconfgcolor) {
 #if TREZOR_MODEL == T
   uint16_t colortable[16], iconcolortable[16];
   set_color_table(colortable, fgcolor, bgcolor);
@@ -362,6 +364,7 @@ void display_loader(uint16_t progress, int yoffset, uint16_t fgcolor,
       }
 // inside of circle - draw glyph
 #define LOADER_ICON_CORNER_CUT 2
+#define LOADER_INDETERMINATE_WIDTH 100
       if (icon &&
           mx + my > (((LOADER_ICON_SIZE / 2) + LOADER_ICON_CORNER_CUT) * 2) &&
           mx >= img_loader_size - (LOADER_ICON_SIZE / 2) &&
@@ -378,10 +381,21 @@ void display_loader(uint16_t progress, int yoffset, uint16_t fgcolor,
         PIXELDATA(iconcolortable[c]);
       } else {
         uint8_t c;
-        if (progress > a) {
-          c = (img_loader[my][mx] & 0x00F0) >> 4;
+        if (indeterminate) {
+          uint16_t diff =
+              (progress > a) ? (progress - a) : (1000 + progress - a);
+          if (diff < LOADER_INDETERMINATE_WIDTH ||
+              diff > 1000 - LOADER_INDETERMINATE_WIDTH) {
+            c = (img_loader[my][mx] & 0x00F0) >> 4;
+          } else {
+            c = img_loader[my][mx] & 0x000F;
+          }
         } else {
-          c = img_loader[my][mx] & 0x000F;
+          if (progress > a) {
+            c = (img_loader[my][mx] & 0x00F0) >> 4;
+          } else {
+            c = img_loader[my][mx] & 0x000F;
+          }
         }
         PIXELDATA(colortable[c]);
       }
@@ -497,18 +511,43 @@ void display_printf(const char *fmt, ...) {
 
 #if TREZOR_MODEL == T
 
-static const uint8_t *get_glyph(int font, uint8_t c) {
-  if (c >= ' ' && c <= '~') {
-    // do nothing - valid ASCII
-  } else
-      // UTF-8 handling: https://en.wikipedia.org/wiki/UTF-8#Description
-      if (c >= 0xC0) {
-    // bytes 11xxxxxx are first byte of UTF-8 characters
-    c = '_';
-  } else {
-    // bytes 10xxxxxx are successive UTF-8 characters
-    return 0;
+static uint8_t convert_char(const uint8_t c) {
+  static char last_was_utf8 = 0;
+
+  // non-printable ASCII character
+  if (c < ' ') {
+    last_was_utf8 = 0;
+    return '_';
   }
+
+  // regular ASCII character
+  if (c < 0x80) {
+    last_was_utf8 = 0;
+    return c;
+  }
+
+  // UTF-8 handling: https://en.wikipedia.org/wiki/UTF-8#Description
+
+  // bytes 11xxxxxx are first bytes of UTF-8 characters
+  if (c >= 0xC0) {
+    last_was_utf8 = 1;
+    return '_';
+  }
+
+  if (last_was_utf8) {
+    // bytes 10xxxxxx can be successive UTF-8 characters ...
+    return 0;  // skip glyph
+  } else {
+    // ... or they are just non-printable ASCII characters
+    return '_';
+  }
+
+  return 0;
+}
+
+static const uint8_t *get_glyph(int font, uint8_t c) {
+  c = convert_char(c);
+  if (!c) return 0;
   switch (font) {
 #ifdef TREZOR_FONT_NORMAL_ENABLE
     case FONT_NORMAL:
@@ -694,7 +733,7 @@ int display_orientation(int degrees) {
 #elif TREZOR_MODEL == 1
     if (degrees == 0 || degrees == 180) {
 #else
-#error Unknown TREZOR model
+#error Unknown Trezor model
 #endif
       DISPLAY_ORIENTATION = degrees;
       display_set_orientation(degrees);

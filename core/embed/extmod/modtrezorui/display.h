@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (c) SatoshiLabs
  *
@@ -20,6 +20,7 @@
 #ifndef __DISPLAY_H__
 #define __DISPLAY_H__
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #if TREZOR_MODEL == T
@@ -38,7 +39,7 @@
 #define DISPLAY_RESY 64
 
 #else
-#error Unknown TREZOR Model
+#error Unknown Trezor Model
 #endif
 
 #define FONT_BPP 4
@@ -82,9 +83,9 @@ void display_avatar(int x, int y, const void *data, int datalen,
                     uint16_t fgcolor, uint16_t bgcolor);
 void display_icon(int x, int y, int w, int h, const void *data, int datalen,
                   uint16_t fgcolor, uint16_t bgcolor);
-void display_loader(uint16_t progress, int yoffset, uint16_t fgcolor,
-                    uint16_t bgcolor, const uint8_t *icon, uint32_t iconlen,
-                    uint16_t iconfgcolor);
+void display_loader(uint16_t progress, bool indeterminate, int yoffset,
+                    uint16_t fgcolor, uint16_t bgcolor, const uint8_t *icon,
+                    uint32_t iconlen, uint16_t iconfgcolor);
 
 #ifndef TREZOR_PRINT_DISABLE
 void display_print_color(uint16_t fgcolor, uint16_t bgcolor);

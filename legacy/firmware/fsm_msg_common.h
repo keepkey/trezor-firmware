@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2018 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -83,6 +83,22 @@ void fsm_msgGetFeatures(const GetFeatures *msg) {
   resp->has_model = true;
   strlcpy(resp->model, "1", sizeof(resp->model));
 
+#if BITCOIN_ONLY
+  resp->capabilities_count = 2;
+  resp->capabilities[0] = Capability_Capability_Bitcoin;
+  resp->capabilities[1] = Capability_Capability_Crypto;
+#else
+  resp->capabilities_count = 8;
+  resp->capabilities[0] = Capability_Capability_Bitcoin;
+  resp->capabilities[1] = Capability_Capability_Bitcoin_like;
+  resp->capabilities[2] = Capability_Capability_Crypto;
+  resp->capabilities[3] = Capability_Capability_Ethereum;
+  resp->capabilities[4] = Capability_Capability_Lisk;
+  resp->capabilities[5] = Capability_Capability_NEM;
+  resp->capabilities[6] = Capability_Capability_Stellar;
+  resp->capabilities[7] = Capability_Capability_U2F;
+#endif
+
   msg_write(MessageType_MessageType_Features, resp);
 }
 
@@ -120,6 +136,8 @@ void fsm_msgPing(const Ping *msg) {
 }
 
 void fsm_msgChangePin(const ChangePin *msg) {
+  CHECK_INITIALIZED
+
   bool removal = msg->has_remove && msg->remove;
   if (removal) {
     if (config_hasPin()) {
@@ -213,8 +231,8 @@ void fsm_msgLoadDevice(const LoadDevice *msg) {
     return;
   }
 
-  if (msg->has_mnemonic && !(msg->has_skip_checksum && msg->skip_checksum)) {
-    if (!mnemonic_check(msg->mnemonic)) {
+  if (msg->mnemonics_count && !(msg->has_skip_checksum && msg->skip_checksum)) {
+    if (!mnemonic_check(msg->mnemonics[0])) {
       fsm_sendFailure(FailureType_Failure_DataError,
                       _("Mnemonic with wrong checksum provided"));
       layoutHome();
@@ -256,12 +274,12 @@ void fsm_msgEntropyAck(const EntropyAck *msg) {
 }
 
 void fsm_msgBackupDevice(const BackupDevice *msg) {
+  (void)msg;
+
   CHECK_INITIALIZED
 
   CHECK_PIN_UNCACHED
 
-      (void)
-      msg;
   char mnemonic[MAX_MNEMONIC_LEN + 1];
   if (config_getMnemonic(mnemonic, sizeof(mnemonic))) {
     reset_backup(true, mnemonic);
@@ -273,7 +291,9 @@ void fsm_msgCancel(const Cancel *msg) {
   (void)msg;
   recovery_abort();
   signing_abort();
+#if !BITCOIN_ONLY
   ethereum_signing_abort();
+#endif
   fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
 }
 

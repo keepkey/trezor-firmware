@@ -1,0 +1,11 @@
+.attic/
+.cache/
+.venv/
+.idea/
+.mypy_cache/
+.pytest_cache/
+.vscode/
+__pycache__/
+*.pyc
+/build
+proto.gv*

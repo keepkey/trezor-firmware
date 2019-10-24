@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2017 Saleem Rashid <trezor@saleemrashid.com>
  *
@@ -92,7 +92,7 @@ const NEMMosaicDefinition *nem_mosaicByName(const char *namespace,
                                             const char *mosaic,
                                             uint8_t network);
 
-size_t nem_canonicalizeMosaics(NEMMosaic *mosaics, size_t mosaics_count);
+void nem_canonicalizeMosaics(NEMTransfer *transfer);
 void nem_mosaicFormatAmount(const NEMMosaicDefinition *definition,
                             uint64_t quantity, const bignum256 *multiplier,
                             char *str_out, size_t size);

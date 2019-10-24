@@ -2,6 +2,13 @@
 # fmt: off
 import protobuf as p
 
+if __debug__:
+    try:
+        from typing import Dict, List  # noqa: F401
+        from typing_extensions import Literal  # noqa: F401
+    except ImportError:
+        pass
+
 
 class MoneroTransactionFinalAck(p.MessageType):
     MESSAGE_WIRE_TYPE = 518
@@ -19,7 +26,7 @@ class MoneroTransactionFinalAck(p.MessageType):
         self.tx_enc_keys = tx_enc_keys
 
     @classmethod
-    def get_fields(cls):
+    def get_fields(cls) -> Dict:
         return {
             1: ('cout_key', p.BytesType, 0),
             2: ('salt', p.BytesType, 0),

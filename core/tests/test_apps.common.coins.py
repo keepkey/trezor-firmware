@@ -5,9 +5,20 @@ from apps.common import coins
 
 class TestCoins(unittest.TestCase):
 
-    def test_coins(self):
+    def test_bitcoin(self):
         ref = [
             ('BTC', 'Bitcoin', 0),
+            ('TEST', 'Testnet', 111),
+            ('REGTEST', 'Regtest', 111),
+        ]
+        for s, n, a in ref:
+            c = coins.by_name(n)
+            self.assertEqual(c.address_type, a)
+            self.assertEqual(c.coin_shortcut, s)
+
+    @unittest.skipUnless(not utils.BITCOIN_ONLY, "altcoin")
+    def test_altcoins(self):
+        ref = [
             ('NMC', 'Namecoin', 52),
             ('LTC', 'Litecoin', 48),
             ('DASH', 'Dash', 76),
@@ -15,14 +26,11 @@ class TestCoins(unittest.TestCase):
             ('TAZ', 'Zcash Testnet', 7461),
         ]
         for s, n, a in ref:
-            c1 = coins.by_shortcut(s)
-            c2 = coins.by_name(n)
-            self.assertEqual(c1, c2)
-            self.assertEqual(c1.address_type, a)
+            c = coins.by_name(n)
+            self.assertEqual(c.address_type, a)
+            self.assertEqual(c.coin_shortcut, s)
 
     def test_failure(self):
-        with self.assertRaises(ValueError):
-            coins.by_shortcut('XXX')
         with self.assertRaises(ValueError):
             coins.by_name('XXXXX')
 

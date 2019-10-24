@@ -53,6 +53,7 @@
 #include "ed25519-donna/ed25519-donna.h"
 #include "ed25519-donna/ed25519-keccak.h"
 #include "ed25519-donna/ed25519.h"
+#include "hmac_drbg.h"
 #include "memzero.h"
 #include "monero/monero.h"
 #include "nem.h"
@@ -65,6 +66,8 @@
 #include "secp256k1.h"
 #include "sha2.h"
 #include "sha3.h"
+#include "shamir.h"
+#include "slip39.h"
 
 #if VALGRIND
 /*
@@ -4623,6 +4626,43 @@ START_TEST(test_pbkdf2_hmac_sha512) {
 }
 END_TEST
 
+START_TEST(test_hmac_drbg) {
+  char entropy[] =
+      "06032cd5eed33f39265f49ecb142c511da9aff2af71203bffaf34a9ca5bd9c0d";
+  char nonce[] = "0e66f71edc43e42a45ad3c6fc6cdc4df";
+  char reseed[] =
+      "01920a4e669ed3a85ae8a33b35a74ad7fb2a6bb4cf395ce00334a9c9a5a5d552";
+  char expected[] =
+      "76fc79fe9b50beccc991a11b5635783a83536add03c157fb30645e611c2898bb2b1bc215"
+      "000209208cd506cb28da2a51bdb03826aaf2bd2335d576d519160842e7158ad0949d1a9e"
+      "c3e66ea1b1a064b005de914eac2e9d4f2d72a8616a80225422918250ff66a41bd2f864a6"
+      "a38cc5b6499dc43f7f2bd09e1e0f8f5885935124";
+  uint8_t result[128];
+  uint8_t null_bytes[128] = {0};
+
+  uint8_t nonce_bytes[16];
+  memcpy(nonce_bytes, fromhex(nonce), sizeof(nonce_bytes));
+  HMAC_DRBG_CTX ctx;
+  hmac_drbg_init(&ctx, fromhex(entropy), strlen(entropy) / 2, nonce_bytes,
+                 strlen(nonce) / 2);
+  hmac_drbg_reseed(&ctx, fromhex(reseed), strlen(reseed) / 2, NULL, 0);
+  hmac_drbg_generate(&ctx, result, sizeof(result));
+  hmac_drbg_generate(&ctx, result, sizeof(result));
+  ck_assert_mem_eq(result, fromhex(expected), sizeof(result));
+
+  for (size_t i = 0; i <= sizeof(result); ++i) {
+    hmac_drbg_init(&ctx, fromhex(entropy), strlen(entropy) / 2, nonce_bytes,
+                   strlen(nonce) / 2);
+    hmac_drbg_reseed(&ctx, fromhex(reseed), strlen(reseed) / 2, NULL, 0);
+    hmac_drbg_generate(&ctx, result, sizeof(result) - 13);
+    memset(result, 0, sizeof(result));
+    hmac_drbg_generate(&ctx, result, i);
+    ck_assert_mem_eq(result, fromhex(expected), i);
+    ck_assert_mem_eq(result + i, null_bytes, sizeof(result) - i);
+  }
+}
+END_TEST
+
 START_TEST(test_mnemonic) {
   static const char *vectors[] = {
       "00000000000000000000000000000000",
@@ -5053,6 +5093,219 @@ START_TEST(test_mnemonic_to_entropy) {
     ck_assert_mem_eq(entropy, fromhex(*a), seed_len);
     a += 2;
     b += 2;
+  }
+}
+END_TEST
+
+START_TEST(test_mnemonic_find_word) {
+  ck_assert_int_eq(-1, mnemonic_find_word("aaaa"));
+  ck_assert_int_eq(-1, mnemonic_find_word("zzzz"));
+  for (int i = 0; i < BIP39_WORDS; i++) {
+    const char *word = mnemonic_get_word(i);
+    int index = mnemonic_find_word(word);
+    ck_assert_int_eq(i, index);
+  }
+}
+END_TEST
+
+START_TEST(test_slip39_get_word) {
+  static const struct {
+    const int index;
+    const char *expected_word;
+  } vectors[] = {{573, "member"},
+                 {0, "academic"},
+                 {1023, "zero"},
+                 {245, "drove"},
+                 {781, "satoshi"}};
+  for (size_t i = 0; i < (sizeof(vectors) / sizeof(*vectors)); i++) {
+    const char *a = get_word(vectors[i].index);
+    ck_assert_str_eq(a, vectors[i].expected_word);
+  }
+}
+END_TEST
+
+START_TEST(test_slip39_word_index) {
+  uint16_t index;
+  static const struct {
+    const char *word;
+    bool expected_result;
+    uint16_t expected_index;
+  } vectors[] = {{"academic", true, 0},
+                 {"zero", true, 1023},
+                 {"drove", true, 245},
+                 {"satoshi", true, 781},
+                 {"member", true, 573},
+                 // 9999 value is never checked since the word is not in list
+                 {"fakeword", false, 9999}};
+  for (size_t i = 0; i < (sizeof(vectors) / sizeof(*vectors)); i++) {
+    bool result = word_index(&index, vectors[i].word, sizeof(vectors[i].word));
+    ck_assert_int_eq(result, vectors[i].expected_result);
+    if (result) {
+      ck_assert_int_eq(index, vectors[i].expected_index);
+    }
+  }
+}
+END_TEST
+
+START_TEST(test_slip39_compute_mask) {
+  static const struct {
+    const uint16_t prefix;
+    const uint16_t expected_mask;
+  } vectors[] = {{
+                     12,
+                     0xFD  // 011111101
+                 },
+                 {
+                     21,
+                     0xF8  // 011111000
+                 },
+                 {
+                     75,
+                     0xAD  // 010101101
+                 },
+                 {
+                     4,
+                     0x1F7  // 111110111
+                 },
+                 {
+                     738,
+                     0x6D  // 001101101
+                 },
+                 {
+                     9,
+                     0x6D  // 001101101
+                 }};
+  for (size_t i = 0; i < (sizeof(vectors) / sizeof(*vectors)); i++) {
+    uint16_t mask = compute_mask(vectors[i].prefix);
+    ck_assert_int_eq(mask, vectors[i].expected_mask);
+  }
+}
+END_TEST
+
+START_TEST(test_slip39_sequence_to_word) {
+  static const struct {
+    const uint16_t prefix;
+    const char *expected_word;
+  } vectors[] = {{7945, "swimming"},
+                 {646, "photo"},
+                 {5, "kernel"},
+                 {34, "either"},
+                 {62, "ocean"}};
+  for (size_t i = 0; i < (sizeof(vectors) / sizeof(*vectors)); i++) {
+    const char *word = button_sequence_to_word(vectors[i].prefix);
+    ck_assert_str_eq(word, vectors[i].expected_word);
+  }
+}
+END_TEST
+
+START_TEST(test_shamir) {
+#define SHAMIR_MAX_COUNT 16
+  static const struct {
+    const uint8_t result[SHAMIR_MAX_LEN];
+    uint8_t result_index;
+    const uint8_t share_indices[SHAMIR_MAX_COUNT];
+    const uint8_t share_values[SHAMIR_MAX_COUNT][SHAMIR_MAX_LEN];
+    uint8_t share_count;
+    size_t len;
+    bool ret;
+  } vectors[] = {{{7,   151, 168, 57,  186, 104, 218, 21, 209, 96,  106,
+                   152, 252, 35,  210, 208, 43,  47,  13, 21,  142, 122,
+                   24,  42,  149, 192, 95,  24,  240, 24, 148, 110},
+                  0,
+                  {2},
+                  {
+                      {7,   151, 168, 57,  186, 104, 218, 21, 209, 96,  106,
+                       152, 252, 35,  210, 208, 43,  47,  13, 21,  142, 122,
+                       24,  42,  149, 192, 95,  24,  240, 24, 148, 110},
+                  },
+                  1,
+                  32,
+                  true},
+
+                 {{53},
+                  255,
+                  {14, 10, 1, 13, 8, 7, 3, 11, 9, 4, 6, 0, 5, 12, 15, 2},
+                  {
+                      {114},
+                      {41},
+                      {116},
+                      {67},
+                      {198},
+                      {109},
+                      {232},
+                      {39},
+                      {90},
+                      {241},
+                      {156},
+                      {75},
+                      {46},
+                      {181},
+                      {144},
+                      {175},
+                  },
+                  16,
+                  1,
+                  true},
+
+                 {{91, 188, 226, 91, 254, 197, 225},
+                  1,
+                  {5, 1, 10},
+                  {
+                      {129, 18, 104, 86, 236, 73, 176},
+                      {91, 188, 226, 91, 254, 197, 225},
+                      {69, 53, 151, 204, 224, 37, 19},
+                  },
+                  3,
+                  7,
+                  true},
+
+                 {{0},
+                  1,
+                  {5, 1, 1},
+                  {
+                      {129, 18, 104, 86, 236, 73, 176},
+                      {91, 188, 226, 91, 254, 197, 225},
+                      {69, 53, 151, 204, 224, 37, 19},
+                  },
+                  3,
+                  7,
+                  false},
+
+                 {{0},
+                  255,
+                  {3, 12, 3},
+                  {
+                      {100, 176, 99, 142, 115, 192, 138},
+                      {54, 139, 99, 172, 29, 137, 58},
+                      {216, 119, 222, 40, 87, 25, 147},
+                  },
+                  3,
+                  7,
+                  false},
+
+                 {{163, 120, 30, 243, 179, 172, 196, 137, 119, 17},
+                  3,
+                  {1, 0, 12},
+                  {{80, 180, 198, 131, 111, 251, 45, 181, 2, 242},
+                   {121, 9, 79, 98, 132, 164, 9, 165, 19, 230},
+                   {86, 52, 173, 138, 189, 223, 122, 102, 248, 157}},
+                  3,
+                  10,
+                  true}};
+
+  for (size_t i = 0; i < (sizeof(vectors) / sizeof(*vectors)); ++i) {
+    uint8_t result[SHAMIR_MAX_LEN];
+    const uint8_t *share_values[SHAMIR_MAX_COUNT];
+    for (size_t j = 0; j < vectors[i].share_count; ++j) {
+      share_values[j] = vectors[i].share_values[j];
+    }
+    ck_assert_int_eq(shamir_interpolate(result, vectors[i].result_index,
+                                        vectors[i].share_indices, share_values,
+                                        vectors[i].share_count, vectors[i].len),
+                     vectors[i].ret);
+    if (vectors[i].ret == true) {
+      ck_assert_mem_eq(result, vectors[i].result, vectors[i].len);
+    }
   }
 }
 END_TEST
@@ -8307,6 +8560,46 @@ START_TEST(test_rc4_rfc6229) {
 }
 END_TEST
 
+static void test_compress_coord(const char *k_raw) {
+  const ecdsa_curve *curve = &secp256k1;
+  curve_point expected_coords;
+
+  bignum256 k = {0};
+
+  bn_read_be(fromhex(k_raw), &k);
+
+  point_multiply(curve, &k, &curve->G, &expected_coords);
+
+  uint8_t compress[33] = {0};
+  compress_coords(&expected_coords, compress);
+
+  bignum256 x = {0}, y = {0};
+  bn_read_be(compress + 1, &x);
+  uncompress_coords(curve, compress[0], &x, &y);
+
+  ck_assert(bn_is_equal(&expected_coords.x, &x));
+  ck_assert(bn_is_equal(&expected_coords.y, &y));
+}
+
+START_TEST(test_compress_coords) {
+  static const char *k_raw[] = {
+      "dc05960ac673fd59554c98655e26722d007bb7ada0c8ff00883fdee70783d0be",
+      "41e41e0a218c980411108a0a58cf88f528c828b4d6f0d2c86234bc2504bdc3cd",
+      "1d963ddcb79f6028a32cadd2421ff7fff969bff5774f73063dab41519b3da175",
+      "2414141f96da0874dbc374b58861589935b7f940806ddf8d2e6b911f62e240f3",
+      "01cc1fb182e29f60fe43e22d250de34f2d3f956bbef2aa9b182d09e5d9176873",
+      "89b3d621d813682692fd61b2baea6b2ea696a44abc76925d29c4887fc4db9367",
+      "20c80c633e05a3a7dfac05fa0e0a7c7a6b708b02323e687735cff81ea5944f59",
+      "5a803c263aa93a4f74648066c03e63fb00641193bae93dfa254dabd634e8b49c",
+      "05efbcc87007797dca68315b9271ac8fb75bddbece53f4dcbfb83fc21cb91fc0",
+      "0bed78ef43474630bd646eef2d7ec19a1acb8e9eecf6a0a3ac7241ac40a7706f",
+  };
+
+  for (int i = 0; i < (int)(sizeof(k_raw) / sizeof(*k_raw)); i++)
+    test_compress_coord(k_raw[i]);
+}
+END_TEST
+
 static int my_strncasecmp(const char *s1, const char *s2, size_t n) {
   size_t i = 0;
   while (i < n) {
@@ -8475,10 +8768,26 @@ Suite *test_suite(void) {
   tcase_add_test(tc, test_pbkdf2_hmac_sha512);
   suite_add_tcase(s, tc);
 
+  tc = tcase_create("hmac_drbg");
+  tcase_add_test(tc, test_hmac_drbg);
+  suite_add_tcase(s, tc);
+
   tc = tcase_create("bip39");
   tcase_add_test(tc, test_mnemonic);
   tcase_add_test(tc, test_mnemonic_check);
   tcase_add_test(tc, test_mnemonic_to_entropy);
+  tcase_add_test(tc, test_mnemonic_find_word);
+  suite_add_tcase(s, tc);
+
+  tc = tcase_create("slip39");
+  tcase_add_test(tc, test_slip39_get_word);
+  tcase_add_test(tc, test_slip39_word_index);
+  tcase_add_test(tc, test_slip39_compute_mask);
+  tcase_add_test(tc, test_slip39_sequence_to_word);
+  suite_add_tcase(s, tc);
+
+  tc = tcase_create("shamir");
+  tcase_add_test(tc, test_shamir);
   suite_add_tcase(s, tc);
 
   tc = tcase_create("pubkey_validity");
@@ -8578,6 +8887,10 @@ Suite *test_suite(void) {
 
   tc = tcase_create("cashaddr");
   tcase_add_test(tc, test_cashaddr);
+  suite_add_tcase(s, tc);
+
+  tc = tcase_create("compress_coords");
+  tcase_add_test(tc, test_compress_coords);
   suite_add_tcase(s, tc);
 
 #if USE_CARDANO

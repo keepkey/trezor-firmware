@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (c) SatoshiLabs
  *
@@ -183,6 +183,10 @@ int usb_hid_write(uint8_t iface_num, const uint8_t *buf, uint32_t len) {
     return -2;  // Invalid interface type
   }
   usb_hid_state_t *state = &iface->hid;
+
+  if (state->ep_in_is_idle == 0) {
+    return 0;  // Last transmission is not over yet
+  }
 
   state->ep_in_is_idle = 0;
   USBD_LL_Transmit(&usb_dev_handle, state->ep_in, UNCONST(buf), (uint16_t)len);

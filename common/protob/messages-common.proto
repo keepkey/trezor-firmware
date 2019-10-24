@@ -1,6 +1,10 @@
 syntax = "proto2";
 package hw.trezor.messages.common;
 
+// Sugar for easier handling in Java
+option java_package = "com.satoshilabs.trezor.lib.protobuf";
+option java_outer_classname = "TrezorMessageCommon";
+
 /**
  * Response: Success of the previous request
  * @end
@@ -40,7 +44,6 @@ message Failure {
  */
 message ButtonRequest {
     optional ButtonRequestType code = 1;
-    optional string data = 2;
     /**
     * Type of button request
     */
@@ -60,6 +63,9 @@ message ButtonRequest {
         ButtonRequest_MnemonicInput = 13;
         ButtonRequest_PassphraseType = 14;
         ButtonRequest_UnknownDerivationPath = 15;
+        ButtonRequest_RecoveryHomepage = 16;
+        ButtonRequest_Success = 17;
+        ButtonRequest_Warning = 18;
     }
 }
 

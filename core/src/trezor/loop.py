@@ -4,7 +4,7 @@ the form of python coroutines (either plain generators or `async` functions) are
 stepped through until completion, and can get asynchronously blocked by
 `yield`ing or `await`ing a syscall.
 
-See `schedule`, `run`, and syscalls `sleep`, `wait`, `signal` and `spawn`.
+See `schedule`, `run`, and syscalls `sleep`, `wait`, `signal` and `race`.
 """
 
 import utime
@@ -13,11 +13,34 @@ from micropython import const
 
 from trezor import io, log
 
-after_step_hook = None  # function, called after each task step
+if False:
+    from typing import (
+        Any,
+        Awaitable,
+        Callable,
+        Coroutine,
+        Dict,
+        Generator,
+        List,
+        Optional,
+        Set,
+        Tuple,
+    )
 
-_QUEUE_SIZE = const(64)  # maximum number of scheduled tasks
-_queue = utimeq.utimeq(_QUEUE_SIZE)
-_paused = {}
+    Task = Coroutine
+    Finalizer = Callable[[Task, Any], None]
+
+# function to call after every task step
+after_step_hook = None  # type: Optional[Callable[[], None]]
+
+# tasks scheduled for execution in the future
+_queue = utimeq.utimeq(64)
+
+# tasks paused on I/O
+_paused = {}  # type: Dict[int, Set[Task]]
+
+# functions to execute after a task is finished
+_finalizers = {}  # type: Dict[int, Finalizer]
 
 if __debug__:
     # for performance stats
@@ -27,35 +50,61 @@ if __debug__:
     log_delay_rb_len = const(10)
     log_delay_rb = array.array("i", [0] * log_delay_rb_len)
 
+    # synthetic event queue
+    synthetic_events = []  # type: List[Tuple[int, Any]]
 
-def schedule(task, value=None, deadline=None):
+
+def schedule(
+    task: Task, value: Any = None, deadline: int = None, finalizer: Finalizer = None
+) -> None:
     """
     Schedule task to be executed with `value` on given `deadline` (in
     microseconds).  Does not start the event loop itself, see `run`.
+    Usually done in very low-level cases, see `race` for more user-friendly
+    and correct concept.
     """
     if deadline is None:
         deadline = utime.ticks_us()
+    if finalizer is not None:
+        _finalizers[id(task)] = finalizer
     _queue.push(deadline, task, value)
 
 
-def pause(task, iface):
+def pause(task: Task, iface: int) -> None:
+    """
+    Block task on given message interface.  Task is resumed when the interface
+    is activated.  It is most probably wrong to call `pause` from user code,
+    see the `wait` syscall for the correct concept.
+    """
     tasks = _paused.get(iface, None)
     if tasks is None:
         tasks = _paused[iface] = set()
     tasks.add(task)
 
 
-def close(task):
+def finalize(task: Task, value: Any) -> None:
+    """Call and remove any finalization callbacks registered for given task."""
+    fn = _finalizers.pop(id(task), None)
+    if fn is not None:
+        fn(task, value)
+
+
+def close(task: Task) -> None:
+    """
+    Unschedule and unblock a task, close it so it can release all resources, and
+    call its finalizer.
+    """
     for iface in _paused:
         _paused[iface].discard(task)
     _queue.discard(task)
     task.close()
+    finalize(task, GeneratorExit())
 
 
-def run():
+def run() -> None:
     """
     Loop forever, stepping through scheduled tasks and awaiting I/O events
-    inbetween.  Use `schedule` first to add a coroutine to the task queue.
+    in between.  Use `schedule` first to add a coroutine to the task queue.
     Tasks yield back to the scheduler on any I/O, usually by calling `await` on
     a `Syscall`.
     """
@@ -79,6 +128,15 @@ def run():
             log_delay_rb[log_delay_pos] = delay
             log_delay_pos = (log_delay_pos + 1) % log_delay_rb_len
 
+            # process synthetic events
+            if synthetic_events:
+                iface, event = synthetic_events[0]
+                msg_tasks = _paused.pop(iface, ())
+                if msg_tasks:
+                    synthetic_events.pop(0)
+                    for task in msg_tasks:
+                        _step(task, event)
+
         if io.poll(_paused, msg_entry, delay):
             # message received, run tasks paused on the interface
             msg_tasks = _paused.pop(msg_entry[0], ())
@@ -88,21 +146,51 @@ def run():
             # timeout occurred, run the first scheduled task
             if _queue:
                 _queue.pop(task_entry)
-                _step(task_entry[1], task_entry[2])
+                _step(task_entry[1], task_entry[2])  # type: ignore
+                # error: Argument 1 to "_step" has incompatible type "int"; expected "Coroutine[Any, Any, Any]"
+                # rationale: We use untyped lists here, because that is what the C API supports.
 
 
-def _step(task, value):
+def clear() -> None:
+    """Clear all queue state.  Any scheduled or paused tasks will be forgotten."""
+    _ = [0, 0, 0]
+    while _queue:
+        _queue.pop(_)
+    _paused.clear()
+    _finalizers.clear()
+
+
+def _step(task: Task, value: Any) -> None:
+    """
+    Step through the task by sending value to it. This can result in either:
+    1. The task raises an exception:
+        a) StopIteration
+            - The Task is completed and we call finalize() to finish it.
+        b) Exception
+            - An error occurred. We still need to call finalize().
+    2. Task does not raise exception and returns either:
+        a) Syscall
+            - Syscall.handle() is called.
+        b) None
+            - The Task is simply scheduled to continue.
+        c) Something else
+            - This should not happen - error.
+    """
     try:
-        if isinstance(value, Exception):
-            result = task.throw(value)
+        if isinstance(value, BaseException):
+            result = task.throw(value)  # type: ignore
+            # error: Argument 1 to "throw" of "Coroutine" has incompatible type "Exception"; expected "Type[BaseException]"
+            # rationale: In micropython, generator.throw() accepts the exception object directly.
         else:
             result = task.send(value)
-    except StopIteration:  # as e:
+    except StopIteration as e:
         if __debug__:
             log.debug(__name__, "finish: %s", task)
+        finalize(task, e.value)
     except Exception as e:
         if __debug__:
             log.exception(__name__, e)
+        finalize(task, e)
     else:
         if isinstance(result, Syscall):
             result.handle(task)
@@ -121,9 +209,15 @@ class Syscall:
     scheduler, they do so through instances of a class derived from `Syscall`.
     """
 
-    def __iter__(self):
+    def __iter__(self) -> Task:  # type: ignore
         # support `yield from` or `await` on syscalls
         return (yield self)
+
+    def __await__(self) -> Generator:
+        return self.__iter__()  # type: ignore
+
+    def handle(self, task: Task) -> None:
+        pass
 
 
 class sleep(Syscall):
@@ -138,10 +232,10 @@ class sleep(Syscall):
     >>> print('missed by %d us', utime.ticks_diff(utime.ticks_us(), planned))
     """
 
-    def __init__(self, delay_us):
+    def __init__(self, delay_us: int) -> None:
         self.delay_us = delay_us
 
-    def handle(self, task):
+    def handle(self, task: Task) -> None:
         deadline = utime.ticks_add(utime.ticks_us(), self.delay_us)
         schedule(task, deadline, deadline)
 
@@ -150,7 +244,7 @@ class wait(Syscall):
     """
     Pause current task, and resume only after a message on `msg_iface` is
     received.  Messages are received either from an USB interface, or the
-    touch display.  Result value a tuple of message values.
+    touch display.  Result value is a tuple of message values.
 
     Example:
 
@@ -158,68 +252,24 @@ class wait(Syscall):
     >>> event, x, y = await loop.wait(io.TOUCH)  # await touch event
     """
 
-    def __init__(self, msg_iface):
+    def __init__(self, msg_iface: int) -> None:
         self.msg_iface = msg_iface
 
-    def handle(self, task):
+    def handle(self, task: Task) -> None:
         pause(task, self.msg_iface)
 
 
-_NO_VALUE = ()
+_type_gen = type((lambda: (yield))())
 
 
-class signal(Syscall):
+class race(Syscall):
     """
-    Pause current task, and let other running task to resume it later with a
-    result value or an exception.
-
-    Example:
-
-    >>> # in task #1:
-    >>> signal = loop.signal()
-    >>> result = await signal
-    >>> print('awaited result:', result)
-    >>> # in task #2:
-    >>> signal.send('hello from task #2')
-    >>> # prints in the next iteration of the event loop
-    """
-
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.value = _NO_VALUE
-        self.task = None
-
-    def handle(self, task):
-        self.task = task
-        self._deliver()
-
-    def send(self, value):
-        self.value = value
-        self._deliver()
-
-    def _deliver(self):
-        if self.task is not None and self.value is not _NO_VALUE:
-            schedule(self.task, self.value)
-            self.task = None
-            self.value = _NO_VALUE
-
-    def __iter__(self):
-        try:
-            return (yield self)
-        except:  # noqa: E722
-            self.task = None
-            raise
-
-
-class spawn(Syscall):
-    """
-    Execute one or more children tasks and wait until one of them exits.
-    Return value of `spawn` is the return value of task that triggered the
-    completion.  By default, `spawn` returns after the first child completes, and
-    other running children are killed (by cancelling any pending schedules and
-    calling `close()`).
+    Given a list of either children tasks or syscalls, `race` waits until one of
+    them completes (tasks are executed in parallel, syscalls are waited upon,
+    directly).  Return value of `race` is the return value of the child that
+    triggered the  completion.  Other running children are killed (by cancelling
+    any pending schedules and raising a `GeneratorExit` by calling `close()`).
+    Child that caused the completion is present in `self.finished`.
 
     Example:
 
@@ -227,56 +277,63 @@ class spawn(Syscall):
     >>> # async def animate_logo(): ...
     >>> touch_task = wait_for_touch()
     >>> animation_task = animate_logo()
-    >>> waiter = loop.spawn(touch_task, animation_task)
-    >>> result = await waiter
-    >>> if animation_task in waiter.finished:
-    >>>     print('animation task returned', result)
-    >>> else:
-    >>>     print('touch task returned', result)
+    >>> racer = loop.race(touch_task, animation_task)
+    >>> result = await racer
+    >>> if animation_task in racer.finished:
+    >>>     print('animation task returned value:', result)
+    >>> elif touch_task in racer.finished:
+    >>>     print('touch task returned value:', result)
 
-    Note: You should not directly `yield` a `spawn` instance, see logic in
-    `spawn.__iter__` for explanation.  Always use `await`.
+    Note: You should not directly `yield` a `race` instance, see logic in
+    `race.__iter__` for explanation.  Always use `await`.
     """
 
-    def __init__(self, *children, exit_others=True):
+    def __init__(self, *children: Awaitable, exit_others: bool = True) -> None:
         self.children = children
         self.exit_others = exit_others
-        self.scheduled = None  # list of scheduled wrapper tasks
-        self.finished = None  # list of children that finished
-        self.callback = None
+        self.finished = []  # type: List[Awaitable]  # children that finished
+        self.scheduled = []  # type: List[Task]  # scheduled wrapper tasks
 
-    def handle(self, task):
+    def handle(self, task: Task) -> None:
+        """
+        Schedule all children Tasks and set `task` as callback.
+        """
+        finalizer = self._finish
+        scheduled = self.scheduled
+        finished = self.finished
+
         self.callback = task
-        self.finished = []
-        self.scheduled = []
-        for index, child in enumerate(self.children):
-            parent = self._wait(child, index)
-            schedule(parent)
-            self.scheduled.append(parent)
+        scheduled.clear()
+        finished.clear()
 
-    def exit(self, skip_index=-1):
-        for index, parent in enumerate(self.scheduled):
-            if index != skip_index:
-                close(parent)
+        for child in self.children:
+            if isinstance(child, _type_gen):
+                child_task = child
+            else:
+                child_task = iter(child)  # type: ignore
+            schedule(child_task, None, None, finalizer)  # type: ignore
+            scheduled.append(child_task)  # type: ignore
+            # TODO: document the types here
 
-    async def _wait(self, child, index):
-        try:
-            result = await child
-        except Exception as e:
-            self._finish(child, index, e)
-            if __debug__:
-                log.exception(__name__, e)
-        else:
-            self._finish(child, index, result)
+    def exit(self, except_for: Task = None) -> None:
+        for task in self.scheduled:
+            if task != except_for:
+                close(task)
 
-    def _finish(self, child, index, result):
+    def _finish(self, task: Task, result: Any) -> None:
         if not self.finished:
+            # because we create tasks for children that are not generators yet,
+            # we need to find the child value that the caller supplied
+            for index, child_task in enumerate(self.scheduled):
+                if child_task is task:
+                    child = self.children[index]
+                    break
             self.finished.append(child)
             if self.exit_others:
-                self.exit(index)
+                self.exit(task)
             schedule(self.callback, result)
 
-    def __iter__(self):
+    def __iter__(self) -> Task:  # type: ignore
         try:
             return (yield self)
         except:  # noqa: E722
@@ -286,64 +343,99 @@ class spawn(Syscall):
             raise
 
 
-class put(Syscall):
-    def __init__(self, ch, value=None):
-        self.ch = ch
-        self.value = value
-
-    def __call__(self, value):
-        self.value = value
-        return self
-
-    def handle(self, task):
-        self.ch.schedule_put(schedule, task, self.value)
-
-
-class take(Syscall):
-    def __init__(self, ch):
-        self.ch = ch
-
-    def __call__(self):
-        return self
-
-    def handle(self, task):
-        if self.ch.schedule_take(schedule, task) and self.ch.id is not None:
-            pause(self.ch, self.ch.id)
-
-
 class chan:
-    def __init__(self, id=None):
-        self.id = id
-        self.putters = []
-        self.takers = []
-        self.put = put(self)
-        self.take = take(self)
+    """
+    Two-ended channel.
+    The receiving end pauses until a value to be received is available. The sending end
+    can choose to wait until the value is received, or it can publish the value without
+    waiting.
 
-    def schedule_publish(self, schedule, value):
-        if self.takers:
-            for taker in self.takers:
-                schedule(taker, value)
-            self.takers.clear()
-            return True
-        else:
-            return False
+    Example:
 
-    def schedule_put(self, schedule, putter, value):
+    >>> # in task #1:
+    >>> signal = loop.chan()
+    >>> while True:
+    >>>     result = await signal.take()
+    >>>     print("awaited result:", result)
+
+    >>> # in task #2:
+    >>> signal.publish("Published without waiting")
+    >>> print("publish completed")
+    >>> await signal.put("Put with await")
+    >>> print("put completed")
+
+    Example Output:
+
+    publish completed
+    awaited result: Published without waiting
+    awaited result: Put with await
+    put completed
+    """
+
+    class Put(Syscall):
+        def __init__(self, ch: "chan", value: Any) -> None:
+            self.ch = ch
+            self.value = value
+            self.task = None  # type: Optional[Task]
+
+        def handle(self, task: Task) -> None:
+            self.task = task
+            self.ch._schedule_put(task, self.value)
+
+    class Take(Syscall):
+        def __init__(self, ch: "chan") -> None:
+            self.ch = ch
+            self.task = None  # type: Optional[Task]
+
+        def handle(self, task: Task) -> None:
+            self.task = task
+            self.ch._schedule_take(task)
+
+    def __init__(self) -> None:
+        self.putters = []  # type: List[Tuple[Optional[Task], Any]]
+        self.takers = []  # type: List[Task]
+
+    def put(self, value: Any) -> Awaitable[None]:  # type: ignore
+        put = chan.Put(self, value)
+        try:
+            return (yield put)
+        except:  # noqa: E722
+            entry = (put.task, value)
+            if entry in self.putters:
+                self.putters.remove(entry)
+            raise
+
+    def take(self) -> Awaitable[Any]:  # type: ignore
+        take = chan.Take(self)
+        try:
+            return (yield take)
+        except:  # noqa: E722
+            if take.task in self.takers:
+                self.takers.remove(take.task)
+            raise
+
+    def publish(self, value: Any) -> None:
         if self.takers:
             taker = self.takers.pop(0)
             schedule(taker, value)
-            schedule(putter, value)
+        else:
+            self.putters.append((None, value))
+
+    def _schedule_put(self, putter: Task, value: Any) -> bool:
+        if self.takers:
+            taker = self.takers.pop(0)
+            schedule(taker, value)
+            schedule(putter)
             return True
         else:
             self.putters.append((putter, value))
             return False
 
-    def schedule_take(self, schedule, taker):
+    def _schedule_take(self, taker: Task) -> None:
         if self.putters:
             putter, value = self.putters.pop(0)
             schedule(taker, value)
-            schedule(putter, value)
-            return True
+            if putter is not None:
+                schedule(putter)
         else:
             self.takers.append(taker)
-            return False

@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (c) SatoshiLabs
  *
@@ -24,58 +24,45 @@
 
 /// package: trezorcrypto.bip39
 
-/// def find_word(prefix: str) -> Optional[str]:
-///     '''
+/// def complete_word(prefix: str) -> Optional[str]:
+///     """
 ///     Return the first word from the wordlist starting with prefix.
-///     '''
-STATIC mp_obj_t mod_trezorcrypto_bip39_find_word(mp_obj_t prefix) {
+///     """
+STATIC mp_obj_t mod_trezorcrypto_bip39_complete_word(mp_obj_t prefix) {
   mp_buffer_info_t pfx;
   mp_get_buffer_raise(prefix, &pfx, MP_BUFFER_READ);
   if (pfx.len == 0) {
     return mp_const_none;
   }
-  for (const char *const *w = mnemonic_wordlist(); *w != 0; w++) {
-    if (strncmp(*w, pfx.buf, pfx.len) == 0) {
-      return mp_obj_new_str(*w, strlen(*w));
-    }
+  const char *word = mnemonic_complete_word(pfx.buf, pfx.len);
+  if (word) {
+    return mp_obj_new_str(word, strlen(word));
+  } else {
+    return mp_const_none;
   }
-  return mp_const_none;
-}
-STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorcrypto_bip39_find_word_obj,
-                                 mod_trezorcrypto_bip39_find_word);
-
-/// def complete_word(prefix: str) -> int:
-///     '''
-///     Return possible 1-letter suffixes for given word prefix.
-///     Result is a bitmask, with 'a' on the lowest bit, 'b' on the second
-///     lowest, etc.
-///     '''
-STATIC mp_obj_t mod_trezorcrypto_bip39_complete_word(mp_obj_t prefix) {
-  mp_buffer_info_t pfx;
-  mp_get_buffer_raise(prefix, &pfx, MP_BUFFER_READ);
-  if (pfx.len == 0) {
-    return mp_obj_new_int(0xFFFFFFFF);  // all letters
-  }
-  uint32_t res = 0;
-  uint8_t bit;
-  const char *word;
-  const char *const *wlist;
-  for (wlist = mnemonic_wordlist(); *wlist != 0; wlist++) {
-    word = *wlist;
-    if (strncmp(word, pfx.buf, pfx.len) == 0 && strlen(word) > pfx.len) {
-      bit = word[pfx.len] - 'a';
-      res |= 1 << bit;
-    }
-  }
-  return mp_obj_new_int(res);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorcrypto_bip39_complete_word_obj,
                                  mod_trezorcrypto_bip39_complete_word);
 
+/// def word_completion_mask(prefix: str) -> int:
+///     """
+///     Return possible 1-letter suffixes for given word prefix.
+///     Result is a bitmask, with 'a' on the lowest bit, 'b' on the second
+///     lowest, etc.
+///     """
+STATIC mp_obj_t mod_trezorcrypto_bip39_word_completion_mask(mp_obj_t prefix) {
+  mp_buffer_info_t pfx;
+  mp_get_buffer_raise(prefix, &pfx, MP_BUFFER_READ);
+  return mp_obj_new_int(mnemonic_word_completion_mask(pfx.buf, pfx.len));
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(
+    mod_trezorcrypto_bip39_word_completion_mask_obj,
+    mod_trezorcrypto_bip39_word_completion_mask);
+
 /// def generate(strength: int) -> str:
-///     '''
+///     """
 ///     Generate a mnemonic of given strength (128, 160, 192, 224 and 256 bits).
-///     '''
+///     """
 STATIC mp_obj_t mod_trezorcrypto_bip39_generate(mp_obj_t strength) {
   int bits = mp_obj_get_int(strength);
   if (bits % 32 || bits < 128 || bits > 256) {
@@ -93,9 +80,9 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorcrypto_bip39_generate_obj,
                                  mod_trezorcrypto_bip39_generate);
 
 /// def from_data(data: bytes) -> str:
-///     '''
+///     """
 ///     Generate a mnemonic from given data (of 16, 20, 24, 28 and 32 bytes).
-///     '''
+///     """
 STATIC mp_obj_t mod_trezorcrypto_bip39_from_data(mp_obj_t data) {
   mp_buffer_info_t bin;
   mp_get_buffer_raise(data, &bin, MP_BUFFER_READ);
@@ -113,9 +100,9 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorcrypto_bip39_from_data_obj,
                                  mod_trezorcrypto_bip39_from_data);
 
 /// def check(mnemonic: str) -> bool:
-///     '''
+///     """
 ///     Check whether given mnemonic is valid.
-///     '''
+///     """
 STATIC mp_obj_t mod_trezorcrypto_bip39_check(mp_obj_t mnemonic) {
   mp_buffer_info_t text;
   mp_get_buffer_raise(mnemonic, &text, MP_BUFFER_READ);
@@ -134,11 +121,14 @@ STATIC void wrapped_ui_wait_callback(uint32_t current, uint32_t total) {
   }
 }
 
-/// def seed(mnemonic: str, passphrase: str, callback: (int, int -> None)=None)
-/// -> bytes:
-///     '''
+/// def seed(
+///     mnemonic: str,
+///     passphrase: str,
+///     callback: Callable[[int, int], None] = None,
+/// ) -> bytes:
+///     """
 ///     Generate seed from mnemonic and passphrase.
-///     '''
+///     """
 STATIC mp_obj_t mod_trezorcrypto_bip39_seed(size_t n_args,
                                             const mp_obj_t *args) {
   mp_buffer_info_t mnemo;
@@ -164,10 +154,10 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorcrypto_bip39_seed_obj, 2,
 
 STATIC const mp_rom_map_elem_t mod_trezorcrypto_bip39_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_bip39)},
-    {MP_ROM_QSTR(MP_QSTR_find_word),
-     MP_ROM_PTR(&mod_trezorcrypto_bip39_find_word_obj)},
     {MP_ROM_QSTR(MP_QSTR_complete_word),
      MP_ROM_PTR(&mod_trezorcrypto_bip39_complete_word_obj)},
+    {MP_ROM_QSTR(MP_QSTR_word_completion_mask),
+     MP_ROM_PTR(&mod_trezorcrypto_bip39_word_completion_mask_obj)},
     {MP_ROM_QSTR(MP_QSTR_generate),
      MP_ROM_PTR(&mod_trezorcrypto_bip39_generate_obj)},
     {MP_ROM_QSTR(MP_QSTR_from_data),

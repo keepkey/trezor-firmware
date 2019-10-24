@@ -19,13 +19,14 @@
 #include "usb21_standard.h"
 #include <stdint.h>
 #include <string.h>
+#include "common.h"
 #include "util.h"
 
 static uint16_t build_bos_descriptor(const struct usb_bos_descriptor *bos,
                                      uint8_t *buf, uint16_t len) {
   uint8_t *tmpbuf = buf;
-  uint16_t count, total = 0, totallen = 0;
-  uint16_t i;
+  uint16_t count = 0, total = 0, totallen = 0;
+  uint16_t i = 0;
 
   memcpy(buf, bos, count = MIN(len, bos->bLength));
   buf += count;

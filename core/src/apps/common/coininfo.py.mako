@@ -1,7 +1,10 @@
 # generated from coininfo.py.mako
 # do not edit manually!
+from trezor import utils
 from trezor.crypto.base58 import blake256d_32, groestl512d_32, keccak_32, sha256d_32
 from trezor.crypto.scripts import blake256_ripemd160_digest, sha256_ripemd160_digest
+
+# flake8: noqa
 
 
 class CoinInfo:
@@ -24,7 +27,9 @@ class CoinInfo:
         force_bip143: bool,
         bip115: bool,
         decred: bool,
+        negative_fee: bool,
         curve_name: str,
+        confidential_assets: dict,
     ):
         self.coin_name = coin_name
         self.coin_shortcut = coin_shortcut
@@ -43,7 +48,9 @@ class CoinInfo:
         self.force_bip143 = force_bip143
         self.bip115 = bip115
         self.decred = decred
+        self.negative_fee = negative_fee
         self.curve_name = curve_name
+        self.confidential_assets = confidential_assets
         if curve_name == "secp256k1-groestl":
             self.b58_hash = groestl512d_32
             self.sign_hash_double = False
@@ -61,6 +68,11 @@ class CoinInfo:
             self.sign_hash_double = True
             self.script_hash = sha256_ripemd160_digest
 
+    def __eq__(self, other):
+        if not isinstance(other, CoinInfo):
+            return NotImplemented
+        return self.coin_name == other.coin_name
+
 
 # fmt: off
 <%
@@ -70,8 +82,13 @@ def hexfmt(x):
     else:
         return "0x{:08x}".format(x)
 
+def optional_dict(x):
+    if x is None:
+        return None
+    return dict(x)
+
 ATTRIBUTES = (
-    ("coin_name", black_repr),
+    ("coin_name", lambda _: "name"),
     ("coin_shortcut", black_repr),
     ("address_type", int),
     ("address_type_p2sh", int),
@@ -88,15 +105,37 @@ ATTRIBUTES = (
     ("force_bip143", bool),
     ("bip115", bool),
     ("decred", bool),
+    ("negative_fee", bool),
     ("curve_name", lambda r: repr(r.replace("_", "-"))),
+    ("confidential_assets", optional_dict),
 )
+
+btc_names = ["Bitcoin", "Testnet", "Regtest"]
+
+coins_btc = [c for c in supported_on("trezor2", bitcoin) if c.name in btc_names]
+coins_alt = [c for c in supported_on("trezor2", bitcoin) if c.name not in btc_names]
+
 %>\
-COINS = [
-% for coin in supported_on("trezor2", bitcoin):
-    CoinInfo(
-        % for attr, func in ATTRIBUTES:
-        ${attr}=${func(coin[attr])},
-        % endfor
-    ),
+def by_name(name: str) -> CoinInfo:
+    if False:
+        pass
+% for coin in coins_btc:
+    elif name == ${black_repr(coin["coin_name"])}:
+        return CoinInfo(
+            % for attr, func in ATTRIBUTES:
+            ${attr}=${func(coin[attr])},
+            % endfor
+        )
 % endfor
-]
+    if not utils.BITCOIN_ONLY:
+        if False:
+            pass
+% for coin in coins_alt:
+        elif name == ${black_repr(coin["coin_name"])}:
+            return CoinInfo(
+                % for attr, func in ATTRIBUTES:
+                ${attr}=${func(coin[attr])},
+                % endfor
+            )
+% endfor
+    raise ValueError('Unknown coin name "%s"' % name)

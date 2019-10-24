@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Fetch information about coins and tokens supported by Trezor and update it in coins_details.json."""
-import os
-import time
 import json
 import logging
-import requests
+import os
 import sys
-import coin_info
+import time
 
 import click
+import requests
+
+import coin_info
 
 LOG = logging.getLogger(__name__)
 
@@ -26,21 +27,22 @@ MARKET_CAPS = {}
 
 # automatic wallet entries
 WALLET_TREZOR = {"Trezor": "https://wallet.trezor.io"}
-WALLET_TREZOR_NEXT = {"Trezor Beta": "https://beta-wallet.trezor.io/next/"}
-WALLET_NEM = {"Nano Wallet": "https://nem.io/downloads/"}
-
+WALLET_ETH_TREZOR = {"Trezor Beta": "https://beta-wallet.trezor.io/next/"}
+WALLET_NEM = {
+    "Nano Wallet": "https://nem.io/downloads/",
+    "Magnum": "https://magnumwallet.co",
+}
 WALLETS_ETH_3RDPARTY = {
     "MyEtherWallet": "https://www.myetherwallet.com",
     "MyCrypto": "https://mycrypto.com",
 }
-WALLETS_ETH_NATIVE = WALLETS_ETH_3RDPARTY.copy()
-WALLETS_ETH_NATIVE.update(WALLET_TREZOR_NEXT)
 
 
-TREZORIO_KNOWN_URLS = (
+TREZOR_KNOWN_URLS = (
     "https://wallet.trezor.io",
     "https://beta-wallet.trezor.io/next/",
     "https://trezor.io/stellar/",
+    "https://omnitrezor.com/",
 )
 
 
@@ -149,7 +151,7 @@ def summary(coins, api_key):
     try:
         ret = coinmarketcap_call("global-metrics/quotes/latest", api_key)
         total_marketcap = int(ret["data"]["quote"]["USD"]["total_market_cap"])
-    except:
+    except Exception:
         pass
 
     return dict(
@@ -257,7 +259,7 @@ def update_erc20(coins, networks, support_info):
             hidden = True
 
         if network_support.get(chain, {}).get("webwallet"):
-            wallets = WALLETS_ETH_NATIVE
+            wallets = WALLET_ETH_TREZOR
         else:
             wallets = WALLETS_ETH_3RDPARTY
 
@@ -285,7 +287,7 @@ def update_ethereum_networks(coins, support_info):
     for coin in coins:
         key = coin["key"]
         if support_info[key].get("webwallet"):
-            wallets = WALLETS_ETH_NATIVE
+            wallets = WALLET_ETH_TREZOR
         else:
             wallets = WALLETS_ETH_3RDPARTY
         details = dict(links=dict(Homepage=coin.get("url")), wallet=wallets)
@@ -329,11 +331,8 @@ def check_missing_data(coins):
                 LOG.warning(f"{k}: Bad wallet entry")
                 hide = True
                 continue
-            if "trezor" in name.lower() and url not in TREZORIO_KNOWN_URLS:
+            if "trezor" in name.lower() and url not in TREZOR_KNOWN_URLS:
                 LOG.warning(f"{k}: Strange URL for Trezor Wallet")
-                hide = True
-            if "trezor.io" in url.lower() and url not in TREZORIO_KNOWN_URLS:
-                LOG.warning(f"{k}: Unexpected trezor.io URL: {url}")
 
         if coin["t1_enabled"] == "no" and coin["t2_enabled"] == "no":
             LOG.info(f"{k}: Coin not enabled on either device")
@@ -342,7 +341,7 @@ def check_missing_data(coins):
         if len(coin.get("wallet", [])) == 0:
             LOG.debug(f"{k}: Missing wallet")
 
-        if "Testnet" in coin["name"]:
+        if "Testnet" in coin["name"] or "Regtest" in coin["name"]:
             LOG.debug(f"{k}: Hiding testnet")
             hide = True
 
@@ -423,6 +422,7 @@ def main(refresh, api_key, verbose):
     print(json.dumps(info, sort_keys=True, indent=4))
     with open(os.path.join(coin_info.DEFS_DIR, "coins_details.json"), "w") as f:
         json.dump(details, f, sort_keys=True, indent=4)
+        f.write("\n")
 
 
 if __name__ == "__main__":

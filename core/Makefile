@@ -17,6 +17,8 @@ UNIX_PORT_OPTS ?=
 CROSS_PORT_OPTS ?=
 
 PRODUCTION ?= 0
+PYOPT      ?= 1
+BITCOIN_ONLY ?= 0
 
 STLINK_VER ?= v2
 OPENOCD = openocd -f interface/stlink-$(STLINK_VER).cfg -c "transport select hla_swd" -f target/stm32f4x.cfg
@@ -39,7 +41,7 @@ CFLAGS += -DGITREV=$(GITREV)
 ## help commands:
 
 help: ## show this help
-	@awk -f help.awk $(MAKEFILE_LIST)
+	@awk -f ../tools/help.awk $(MAKEFILE_LIST)
 
 ## dependencies commands:
 
@@ -68,29 +70,18 @@ test_emu: ## run selected device tests from python-trezor
 test_emu_monero: ## run selected monero device tests from monero-agent
 	cd tests ; ./run_tests_device_emu_monero.sh $(TESTOPTS)
 
+test_emu_u2f: ## run selected u2f device tests from u2f-tests-hid
+	cd tests ; ./run_tests_device_emu_u2f.sh $(TESTOPTS)
+
+test_emu_fido2: ## run fido2 device tests
+	cd tests ; ./run_tests_device_emu_fido2.sh $(TESTOPTS)
+
 pylint: ## run pylint on application sources and tests
 	pylint -E $(shell find src tests -name *.py)
 
-## style commands:
-
-style_check: ## run code style check on application sources and tests
-	flake8 --version
-	isort --version | grep "VERSION"
-	black --version
-	flake8 $(shell find src -name *.py)
-	isort --check-only $(shell find src -name *.py ! -path 'src/trezor/messages/*')
-	black --check $(shell find src -name *.py ! -path 'src/trezor/messages/*')
-
-style: ## apply code style on application sources and tests
-	isort $(shell find src -name *.py ! -path 'src/trezor/messages/*')
-	black $(shell find src -name *.py ! -path 'src/trezor/messages/*')
-
-cstyle_check: ## run code style check on low-level C code
-	./tools/clang-format-check embed/*/*.{c,h} embed/extmod/modtrezor*/*.{c,h}
-
-
-cstyle: ## apply code style on low-level C code
-	clang-format -i embed/*/*.{c,h} embed/extmod/modtrezor*/*.{c,h}
+mypy:
+	mypy --config-file ../setup.cfg \
+		src/main.py
 
 ## code generation:
 
@@ -121,16 +112,13 @@ build_reflash: ## build reflash firmware + reflash image
 	dd if=build/bootloader/bootloader.bin of=$(REFLASH_BUILD_DIR)/sdimage.bin bs=1 seek=49152
 
 build_firmware: res build_cross ## build firmware with frozen modules
-	$(SCONS) CFLAGS="$(CFLAGS)" PRODUCTION="$(PRODUCTION)" $(FIRMWARE_BUILD_DIR)/firmware.bin
+	$(SCONS) CFLAGS="$(CFLAGS)" PRODUCTION="$(PRODUCTION)" PYOPT="$(PYOPT)" BITCOIN_ONLY="$(BITCOIN_ONLY)" $(FIRMWARE_BUILD_DIR)/firmware.bin
 
 build_unix: res ## build unix port
-	$(SCONS) CFLAGS="$(CFLAGS)" $(UNIX_BUILD_DIR)/micropython $(UNIX_PORT_OPTS)
+	$(SCONS) CFLAGS="$(CFLAGS)" $(UNIX_BUILD_DIR)/micropython $(UNIX_PORT_OPTS) BITCOIN_ONLY="$(BITCOIN_ONLY)"
 
-build_unix_noui: res ## build unix port without UI support
-	$(SCONS) CFLAGS="$(CFLAGS)" $(UNIX_BUILD_DIR)/micropython $(UNIX_PORT_OPTS) TREZOR_EMULATOR_NOUI=1
-
-build_unix_raspi: res ## build unix port for Raspberry Pi
-	$(SCONS) CFLAGS="$(CFLAGS)" $(UNIX_BUILD_DIR)/micropython $(UNIX_PORT_OPTS) TREZOR_EMULATOR_RASPI=1
+build_unix_frozen: res build_cross ## build unix port with frozen modules
+	$(SCONS) CFLAGS="$(CFLAGS)" $(UNIX_BUILD_DIR)/micropython $(UNIX_PORT_OPTS) PYOPT="$(PYOPT)" BITCOIN_ONLY="$(BITCOIN_ONLY)" TREZOR_EMULATOR_FROZEN=1
 
 build_cross: ## build mpy-cross port
 	$(MAKE) -C vendor/micropython/mpy-cross $(CROSS_PORT_OPTS)

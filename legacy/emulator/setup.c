@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2017 Saleem Rashid <trezor@saleemrashid.com>
  *
@@ -57,7 +57,7 @@ void __attribute__((noreturn)) shutdown(void) {
 }
 
 void emulatorRandom(void *buffer, size_t size) {
-  ssize_t n, len = 0;
+  ssize_t n = 0, len = 0;
   do {
     n = read(random_fd, (char *)buffer + len, size - len);
     if (n < 0) {

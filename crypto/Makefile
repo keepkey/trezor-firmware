@@ -21,6 +21,7 @@ CFLAGS   += $(OPTFLAGS) \
             -Winit-self \
             -Wuninitialized \
             -Wformat-security \
+            -Wno-missing-braces \
             -Werror
 
 VALGRIND ?= 1
@@ -66,6 +67,10 @@ SRCS  += nem.c
 SRCS  += nano.c
 SRCS  += segwit_addr.c cash_addr.c
 SRCS  += memzero.c
+SRCS  += shamir.c
+SRCS  += hmac_drbg.c
+SRCS  += rfc6979.c
+SRCS  += slip39.c
 
 OBJS   = $(SRCS:.c=.o)
 

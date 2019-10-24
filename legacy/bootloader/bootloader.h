@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -20,9 +20,7 @@
 #ifndef __BOOTLOADER_H__
 #define __BOOTLOADER_H__
 
-#define VERSION_MAJOR 1
-#define VERSION_MINOR 8
-#define VERSION_PATCH 0
+#include "version.h"
 
 #define STR(X) #X
 #define VERSTR(X) STR(X)

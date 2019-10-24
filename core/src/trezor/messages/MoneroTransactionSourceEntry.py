@@ -7,9 +7,10 @@ from .MoneroOutputEntry import MoneroOutputEntry
 
 if __debug__:
     try:
-        from typing import List
+        from typing import Dict, List  # noqa: F401
+        from typing_extensions import Literal  # noqa: F401
     except ImportError:
-        List = None  # type: ignore
+        pass
 
 
 class MoneroTransactionSourceEntry(p.MessageType):
@@ -37,7 +38,7 @@ class MoneroTransactionSourceEntry(p.MessageType):
         self.multisig_kLRki = multisig_kLRki
 
     @classmethod
-    def get_fields(cls):
+    def get_fields(cls) -> Dict:
         return {
             1: ('outputs', MoneroOutputEntry, p.FLAG_REPEATED),
             2: ('real_output', p.UVarintType, 0),

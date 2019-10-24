@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -54,7 +54,7 @@ const CoinInfo *coinBySlip44(uint32_t coin_type) {
 bool coinExtractAddressType(const CoinInfo *coin, const char *addr,
                             uint32_t *address_type) {
   if (!addr) return false;
-  uint8_t addr_raw[MAX_ADDR_RAW_SIZE];
+  uint8_t addr_raw[MAX_ADDR_RAW_SIZE] = {0};
   int len = base58_decode_check(addr, coin->curve->hasher_base58, addr_raw,
                                 MAX_ADDR_RAW_SIZE);
   if (len >= 21) {

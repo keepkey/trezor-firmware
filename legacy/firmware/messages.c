@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -164,12 +164,12 @@ bool msg_write_common(char type, uint16_t msg_id, const void *msg_ptr) {
     return false;
   }
 
-  size_t len;
+  size_t len = 0;
   if (!pb_get_encoded_size(&len, fields, msg_ptr)) {
     return false;
   }
 
-  void (*append)(uint8_t);
+  void (*append)(uint8_t) = NULL;
   bool (*pb_callback)(pb_ostream_t *, const uint8_t *, size_t);
 
   if (type == 'n') {

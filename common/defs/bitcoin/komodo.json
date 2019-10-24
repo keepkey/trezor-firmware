@@ -32,15 +32,17 @@
   "uri_prefix": "komodo",
   "min_address_length": 27,
   "max_address_length": 34,
-  "bitcore": [  
+  "bitcore": [
     "https://api.kmd.dev"
   ],
   "blockbook": [],
+  "negative_fee": true,
   "cooldown": 100,
   "consensus_branch_id": {
     "1": 0,
     "2": 0,
     "3": 1537743641,
     "4": 1991772603
-  }
+  },
+  "confidential_assets": null
 }

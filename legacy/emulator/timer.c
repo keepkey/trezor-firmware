@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2017 Saleem Rashid <trezor@saleemrashid.com>
  *
@@ -24,7 +24,7 @@
 void timer_init(void) {}
 
 uint32_t timer_ms(void) {
-  struct timespec t;
+  struct timespec t = {0};
   clock_gettime(CLOCK_MONOTONIC, &t);
 
   uint32_t msec = t.tv_sec * 1000 + (t.tv_nsec / 1000000);

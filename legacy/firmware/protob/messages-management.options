@@ -9,6 +9,7 @@ Features.bootloader_hash                max_size:32
 Features.model                          max_size:17
 Features.fw_vendor                      max_size:256
 Features.fw_vendor_keys                 max_size:32
+Features.capabilities                   max_count:32
 
 ApplySettings.language                  max_size:17
 ApplySettings.label                     max_size:33
@@ -16,7 +17,7 @@ ApplySettings.homescreen                max_size:1024
 
 Ping.message                            max_size:256
 
-LoadDevice.mnemonic                     max_size:241
+LoadDevice.mnemonics                    max_count:16 max_size:241
 LoadDevice.pin                          max_size:10
 LoadDevice.language                     max_size:17
 LoadDevice.label                        max_size:33

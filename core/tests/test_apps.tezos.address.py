@@ -1,14 +1,15 @@
-from ubinascii import unhexlify
-
 from common import *
-from trezor.messages import TezosContractType
-from trezor.messages.TezosContractID import TezosContractID
 
-from apps.tezos.sign_tx import _get_address_from_contract
-from apps.tezos.helpers import validate_full_path
 from apps.common.paths import HARDENED
 
+if not utils.BITCOIN_ONLY:
+    from apps.tezos.sign_tx import _get_address_from_contract
+    from apps.tezos.helpers import validate_full_path
+    from trezor.messages import TezosContractType
+    from trezor.messages.TezosContractID import TezosContractID
 
+
+@unittest.skipUnless(not utils.BITCOIN_ONLY, "altcoin")
 class TestTezosAddress(unittest.TestCase):
     def test_get_address_from_contract(self):
         contracts = [
@@ -46,10 +47,11 @@ class TestTezosAddress(unittest.TestCase):
             [44 | HARDENED],
             [44 | HARDENED, 1729 | HARDENED],
             [44 | HARDENED, 1729 | HARDENED, 0],
-            [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 0 | HARDENED],
+            [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 0],
             [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 0 | HARDENED, 0 | HARDENED],
             [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 1, 0],
             [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 0, 0],
+            [44 | HARDENED, 1729 | HARDENED, 1 | HARDENED, 1 | HARDENED],
             [44 | HARDENED, 1729 | HARDENED, 9999000 | HARDENED],
             [44 | HARDENED, 60 | HARDENED, 0 | HARDENED, 0, 0],
             [1 | HARDENED, 1 | HARDENED, 1 | HARDENED],
@@ -58,6 +60,9 @@ class TestTezosAddress(unittest.TestCase):
             [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED],
             [44 | HARDENED, 1729 | HARDENED, 3 | HARDENED],
             [44 | HARDENED, 1729 | HARDENED, 9 | HARDENED],
+            [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 0 | HARDENED],
+            [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 3 | HARDENED],
+            [44 | HARDENED, 1729 | HARDENED, 0 | HARDENED, 9 | HARDENED],
         ]
 
         for path in incorrect_paths:

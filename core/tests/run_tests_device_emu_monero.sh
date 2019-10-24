@@ -1,28 +1,43 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 : "${RUN_PYTHON_TESTS:=0}"
 : "${FORCE_DOCKER_USE:=0}"
+: "${RUN_TEST_EMU:=1}"
 
-SDIR="$(SHELL_SESSION_FILE='' && cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-CORE_DIR="$SDIR/.."
-MICROPYTHON="$CORE_DIR/build/unix/micropython"
-PYOPT=0
+CORE_DIR="$(SHELL_SESSION_FILE='' && cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd )"
+MICROPYTHON="${MICROPYTHON:-$CORE_DIR/build/unix/micropython}"
+TREZOR_SRC="${CORE_DIR}/src"
 
-# run emulator
-cd "$CORE_DIR/src"
-"$MICROPYTHON" -O$PYOPT main.py >/dev/null &
-upy_pid=$!
-cd -
-sleep 1
+DISABLE_FADE=1
+PYOPT="${PYOPT:-0}"
+upy_pid=""
 
-export TREZOR_PATH=udp:127.0.0.1:21324
+# run emulator if RUN_TEST_EMU
+if [[ $RUN_TEST_EMU > 0 ]]; then
+  source ../trezor_cmd.sh
+
+  # remove flash and sdcard files before run to prevent inconsistent states
+  mv "${TREZOR_PROFILE_DIR}/trezor.flash" "${TREZOR_PROFILE_DIR}/trezor.flash.bkp" 2>/dev/null
+  mv "${TREZOR_PROFILE_DIR}/trezor.sdcard" "${TREZOR_PROFILE_DIR}/trezor.sdcard.bkp" 2>/dev/null
+
+  cd "${TREZOR_SRC}"
+  echo "Starting emulator: $MICROPYTHON $ARGS ${MAIN}"
+
+  TREZOR_TEST=1 \
+  TREZOR_DISABLE_FADE=$DISABLE_FADE \
+    $MICROPYTHON $ARGS "${MAIN}" &> "${TREZOR_LOGFILE}" &
+  upy_pid=$!
+  cd -
+  sleep 30
+fi
+
 DOCKER_ID=""
 
 # Test termination trap
 terminate_test() {
   if [[ $# > 0 ]]; then error=$1; fi
-  kill $upy_pid
-  if [ -n "$DOCKER_ID" ]; then docker kill $DOCKER_ID 2>/dev/null >/dev/null; fi 
+  if [ -n "$upy_pid" ]; then kill $upy_pid 2> /dev/null; fi
+  if [ -n "$DOCKER_ID" ]; then docker kill $DOCKER_ID 2>/dev/null >/dev/null; fi
   exit $error
 }
 
@@ -49,16 +64,18 @@ if [[ "$OSTYPE" != "linux-gnu" && "$OSTYPE" != "darwin"* ]]; then
 fi
 
 error=1
-: "${TREZOR_MONERO_TESTS_URL:=https://github.com/ph4r05/monero/releases/download/v0.14.0.2-tests-u14.04-02/trezor_tests}"
-: "${TREZOR_MONERO_TESTS_SHA256SUM:=ad7d366ad1d673f77523031da383ae12547270b6257962cb250ea75e11648697}"
+: "${TREZOR_MONERO_TESTS_URL:=https://github.com/ph4r05/monero/releases/download/v0.14.1.0-tests-u14.04-01/trezor_tests}"
+: "${TREZOR_MONERO_TESTS_SHA256SUM:=140a16b3d6105b5e8e88a93b451e9600a36ed23928ea3cf2f975f9c83f36dab7}"
 : "${TREZOR_MONERO_TESTS_PATH:=$CORE_DIR/tests/trezor_monero_tests}"
 : "${TREZOR_MONERO_TESTS_LOG:=$CORE_DIR/tests/trezor_monero_tests.log}"
 
-if [[ ! -f "$TREZOR_MONERO_TESTS_PATH" || "`shasum -a256 "$TREZOR_MONERO_TESTS_PATH" | cut -d' ' -f1`" != $TREZOR_MONERO_TESTS_SHA256SUM ]]; then 
+if [[ ! -f "$TREZOR_MONERO_TESTS_PATH" || "`shasum -a256 "$TREZOR_MONERO_TESTS_PATH" | cut -d' ' -f1`" != $TREZOR_MONERO_TESTS_SHA256SUM ]]; then
   echo "Downloading Trezor monero tests binary to `pwd`${TREZOR_MONERO_TESTS_PATH:1}"
-  curl -# -L -o "$TREZOR_MONERO_TESTS_PATH" "$TREZOR_MONERO_TESTS_URL" \
+  wget -O "$TREZOR_MONERO_TESTS_PATH" "$TREZOR_MONERO_TESTS_URL" \
     && chmod +x "$TREZOR_MONERO_TESTS_PATH" \
     && test "`shasum -a256 "$TREZOR_MONERO_TESTS_PATH" | cut -d' ' -f1`" == "$TREZOR_MONERO_TESTS_SHA256SUM" || exit 1
+else
+  echo "Trezor monero binary with valid hash already present at $TREZOR_MONERO_TESTS_PATH - not downloading again."
 fi
 
 echo "Running tests"
@@ -68,15 +85,15 @@ if [[ "$OSTYPE" == "linux-gnu" && "$FORCE_DOCKER_USE" != 1 ]]; then
   error=$?
 
 elif [[ "$OSTYPE" == "darwin"* || "$FORCE_DOCKER_USE" == 1 ]]; then
-  DOCKER_ID=$(docker run -idt --mount type=bind,src="$CORE_DIR",dst="$CORE_DIR" -w "$CORE_DIR" --network=host ubuntu:18.04)    
+  DOCKER_ID=$(docker run -idt --mount type=bind,src="$CORE_DIR",dst="$CORE_DIR" -w "$CORE_DIR" --network=host ubuntu:18.04)
   docker exec $DOCKER_ID apt-get update -qq 2>/dev/null >/dev/null
   docker exec $DOCKER_ID apt-get install --no-install-recommends --no-upgrade -qq net-tools socat 2>/dev/null >/dev/null
   docker exec -d $DOCKER_ID socat UDP-LISTEN:21324,reuseaddr,reuseport,fork UDP4-SENDTO:host.docker.internal:21324
   docker exec -d $DOCKER_ID socat UDP-LISTEN:21325,reuseaddr,reuseport,fork UDP4-SENDTO:host.docker.internal:21325
   docker exec $DOCKER_ID "$TREZOR_MONERO_TESTS_PATH" 2>&1 > "$TREZOR_MONERO_TESTS_LOG"
-  error=$? 
- 
-else 
+  error=$?
+
+else
   echo "Unsupported OS: $OSTYPE"
   exit 1
 fi
@@ -93,4 +110,3 @@ else
 fi
 
 exit $error
-

@@ -3,6 +3,9 @@ from micropython import const
 
 from trezor import io, loop, utils
 
+if False:
+    from trezorio import WireInterface
+
 _REP_LEN = const(64)
 
 _REP_MARKER = const(63)  # ord('?')
@@ -12,29 +15,30 @@ _REP_INIT_DATA = const(9)  # offset of data in the initial report
 _REP_CONT_DATA = const(1)  # offset of data in the continuation report
 
 SESSION_ID = const(0)
+INVALID_TYPE = const(-1)
 
 
 class Reader:
     """
-    Decoder for legacy codec over the HID layer.  Provides readable
+    Decoder for a wire codec over the HID (or UDP) layer.  Provides readable
     async-file-like interface.
     """
 
-    def __init__(self, iface):
+    def __init__(self, iface: WireInterface) -> None:
         self.iface = iface
-        self.type = None
-        self.size = None
-        self.data = None
+        self.type = INVALID_TYPE
+        self.size = 0
         self.ofs = 0
+        self.data = bytes()
 
-    def __repr__(self):
-        return "<ReaderV1: type=%d size=%dB>" % (self.type, self.size)
+    def __repr__(self) -> str:
+        return "<Reader type: %s>" % self.type
 
-    async def aopen(self):
+    async def aopen(self) -> None:
         """
-        Begin the message transmission by waiting for initial V2 message report
-        on this session.  `self.type` and `self.size` are initialized and
-        available after `aopen()` returns.
+        Start reading a message by waiting for initial message report.  Because
+        the first report contains the message header, `self.type` and
+        `self.size` are initialized and available after `aopen()` returns.
         """
         read = loop.wait(self.iface.iface_num() | io.POLL_READ)
         while True:
@@ -53,7 +57,7 @@ class Reader:
         self.data = report[_REP_INIT_DATA : _REP_INIT_DATA + msize]
         self.ofs = 0
 
-    async def areadinto(self, buf):
+    async def areadinto(self, buf: bytearray) -> int:
         """
         Read exactly `len(buf)` bytes into `buf`, waiting for additional
         reports, if needed.  Raises `EOFError` if end-of-message is encountered
@@ -87,21 +91,18 @@ class Reader:
 
 class Writer:
     """
-    Encoder for legacy codec over the HID layer.  Provides writable
+    Encoder for a wire codec over the HID (or UDP) layer.  Provides writable
     async-file-like interface.
     """
 
-    def __init__(self, iface):
+    def __init__(self, iface: WireInterface):
         self.iface = iface
-        self.type = None
-        self.size = None
-        self.data = bytearray(_REP_LEN)
+        self.type = INVALID_TYPE
+        self.size = 0
         self.ofs = 0
+        self.data = bytearray(_REP_LEN)
 
-    def __repr__(self):
-        return "<WriterV1: type=%d size=%dB>" % (self.type, self.size)
-
-    def setheader(self, mtype, msize):
+    def setheader(self, mtype: int, msize: int) -> None:
         """
         Reset the writer state and load the message header with passed type and
         total message size.
@@ -113,7 +114,7 @@ class Writer:
         )
         self.ofs = _REP_INIT_DATA
 
-    async def awrite(self, buf):
+    async def awrite(self, buf: bytes) -> int:
         """
         Encode and write every byte from `buf`.  Does not need to be called in
         case message has zero length.  Raises `EOFError` if the length of `buf`
@@ -142,7 +143,7 @@ class Writer:
 
         return nwritten
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         """Flush and close the message transmission."""
         if self.ofs != _REP_CONT_DATA:
             # we didn't write anything or last write() wasn't report-aligned,

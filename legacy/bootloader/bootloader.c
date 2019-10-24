@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -35,7 +35,7 @@
 #include "util.h"
 
 void layoutFirmwareFingerprint(const uint8_t *hash) {
-  char str[4][17];
+  char str[4][17] = {0};
   for (int i = 0; i < 4; i++) {
     data2hex(hash + i * 8, 8, str[i]);
   }
@@ -53,7 +53,7 @@ bool get_button_response(void) {
 
 void show_halt(const char *line1, const char *line2) {
   layoutDialog(&bmp_icon_error, NULL, NULL, NULL, line1, line2, NULL,
-               "Unplug your TREZOR,", "reinstall firmware.", NULL);
+               "Unplug your Trezor,", "reinstall firmware.", NULL);
   shutdown();
 }
 
@@ -89,7 +89,7 @@ static void bootloader_loop(void) {
   oledClear();
   oledDrawBitmap(0, 0, &bmp_logo64);
   if (firmware_present_new()) {
-    oledDrawStringCenter(90, 10, "TREZOR", FONT_STANDARD);
+    oledDrawStringCenter(90, 10, "Trezor", FONT_STANDARD);
     oledDrawStringCenter(90, 30, "Bootloader", FONT_STANDARD);
     oledDrawStringCenter(90, 50,
                          VERSTR(VERSION_MAJOR) "." VERSTR(
@@ -129,7 +129,7 @@ int main(void) {
     const image_header *hdr =
         (const image_header *)FLASH_PTR(FLASH_FWHEADER_START);
 
-    uint8_t fingerprint[32];
+    uint8_t fingerprint[32] = {0};
     int signed_firmware = signatures_new_ok(hdr, fingerprint);
     if (SIG_OK != signed_firmware) {
       show_unofficial_warning(fingerprint);
@@ -137,7 +137,7 @@ int main(void) {
 
     if (SIG_OK != check_firmware_hashes(hdr)) {
       layoutDialog(&bmp_icon_error, NULL, NULL, NULL, "Broken firmware",
-                   "detected.", NULL, "Unplug your TREZOR,",
+                   "detected.", NULL, "Unplug your Trezor,",
                    "reinstall firmware.", NULL);
       shutdown();
     }

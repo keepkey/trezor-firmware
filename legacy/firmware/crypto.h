@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -43,6 +43,9 @@ int sshMessageSign(HDNode *node, const uint8_t *message, size_t message_len,
 
 int gpgMessageSign(HDNode *node, const uint8_t *message, size_t message_len,
                    uint8_t *signature);
+
+int signifyMessageSign(HDNode *node, const uint8_t *message, size_t message_len,
+                       uint8_t *signature);
 
 int cryptoMessageSign(const CoinInfo *coin, HDNode *node,
                       InputScriptType script_type, const uint8_t *message,

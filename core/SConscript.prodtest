@@ -12,7 +12,10 @@ CPPPATH_MOD += [
     'vendor/trezor-crypto',
 ]
 SOURCE_MOD += [
+    'vendor/trezor-crypto/hmac_drbg.c',
     'vendor/trezor-crypto/memzero.c',
+    'vendor/trezor-crypto/rand.c',
+    'vendor/trezor-crypto/sha2.c',
 ]
 
 # modtrezorui
@@ -100,7 +103,7 @@ env.Replace(
     CCFLAGS='$COPT '
     '-g3 '
     '-nostdlib '
-    '-std=gnu99 -Wall -Werror -Wdouble-promotion -Wpointer-arith -fno-common '
+    '-std=gnu99 -Wall -Werror -Wdouble-promotion -Wpointer-arith -Wno-missing-braces -fno-common '
     '-fsingle-precision-constant -fdata-sections -ffunction-sections '
     '-ffreestanding '
     '-fstack-protector-all '

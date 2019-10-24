@@ -56,6 +56,7 @@ CFLAGS   += $(OPTFLAGS) \
             -Winit-self \
             -Wuninitialized \
             -Wformat-security \
+            -Wno-missing-braces \
             -Werror \
             -fno-common \
             -fno-exceptions \
@@ -91,14 +92,8 @@ LDFLAGS  += -L$(TOP_DIR)emulator
 LDLIBS   += -ltrezor -lemulator
 LIBDEPS  += $(TOP_DIR)/libtrezor.a $(TOP_DIR)emulator/libemulator.a
 
-ifeq ($(HEADLESS),1)
-CFLAGS   += -DHEADLESS=1
-else
-CFLAGS   += -DHEADLESS=0
-
 CFLAGS   += $(shell pkg-config --cflags sdl2)
 LDLIBS   += $(shell pkg-config --libs sdl2)
-endif
 
 ifdef RANDOM_DEV_FILE
 CFLAGS += -DRANDOM_DEV_FILE=\"$(RANDOM_DEV_FILE)\"
@@ -132,11 +127,21 @@ LDLIBS   += -lopencm3_stm32f2
 LIBDEPS  += $(TOOLCHAIN_DIR)/lib/libopencm3_stm32f2.a
 endif
 
+ifeq ($(BITCOIN_ONLY), 1)
+CFLAGS += -DBITCOIN_ONLY=1
+CFLAGS += -DU2F_ENABLED=0
+else
+CFLAGS += -DBITCOIN_ONLY=0
+CFLAGS += -DU2F_ENABLED=1
+endif
+
 ifeq ($(MEMORY_PROTECT), 0)
-CFLAGS += -DMEMORY_PROTECT=0
+CFLAGS   += -DMEMORY_PROTECT=0
+CPUFLAGS += -DMEMORY_PROTECT=0
 $(info MEMORY_PROTECT=0)
 else
-CFLAGS += -DMEMORY_PROTECT=1
+CFLAGS   += -DMEMORY_PROTECT=1
+CPUFLAGS += -DMEMORY_PROTECT=1
 $(info MEMORY_PROTECT=1)
 endif
 
@@ -192,9 +197,9 @@ $(NAME).elf: $(OBJS) $(LDSCRIPT) $(LIBDEPS)
 	@printf "  LD      $@\n"
 	$(Q)$(LD) -o $(NAME).elf $(OBJS) $(LDLIBS) $(LDFLAGS)
 
-%.o: %.s Makefile
+%.o: %.S Makefile
 	@printf "  AS      $@\n"
-	$(Q)$(AS) $(CPUFLAGS) -o $@ $<
+	$(Q)$(CC) $(CPUFLAGS) -o $@ -c $<
 
 %.o: %.c Makefile
 	@printf "  CC      $@\n"

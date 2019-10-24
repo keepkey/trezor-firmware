@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2018 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -25,6 +25,8 @@
 #include "layout.h"
 #include "memory.h"
 #include "util.h"
+
+#if MEMORY_PROTECT
 
 static int known_bootloader(int r, const uint8_t *hash) {
   if (r != 32) return 0;
@@ -123,18 +125,19 @@ static int known_bootloader(int r, const uint8_t *hash) {
              "\xf7\xfa\x16\x5b\xe6\xd7\x80\xf3\xe1\xaf\x00\xab\xc0\x7d\xf8\xb3"
              "\x07\x6b\xcd\xad\x72\xd7\x0d\xa2\x2a\x63\xd8\x89\x6b\x63\x91\xd8",
              32))
-    return 1;  // 1.8.0 shipped with fw 1.8.0
+    return 1;  // 1.8.0 shipped with fw 1.8.0 and 1.8.1
   return 0;
 }
+#endif
 
 void check_bootloader(void) {
 #if MEMORY_PROTECT
-  uint8_t hash[32];
+  uint8_t hash[32] = {0};
   int r = memory_bootloader_hash(hash);
 
   if (!known_bootloader(r, hash)) {
     layoutDialog(&bmp_icon_error, NULL, NULL, NULL, _("Unknown bootloader"),
-                 _("detected."), NULL, _("Unplug your TREZOR"),
+                 _("detected."), NULL, _("Unplug your Trezor"),
                  _("contact our support."), NULL);
     shutdown();
   }
@@ -185,7 +188,7 @@ void check_bootloader(void) {
   }
   // show info and halt
   layoutDialog(&bmp_icon_error, NULL, NULL, NULL, _("Bootloader update"),
-               _("broken."), NULL, _("Unplug your TREZOR"),
+               _("broken."), NULL, _("Unplug your Trezor"),
                _("contact our support."), NULL);
   shutdown();
 #endif

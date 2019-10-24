@@ -8,6 +8,15 @@ option java_outer_classname = "TrezorMessageManagement";
 import "messages-common.proto";
 
 /**
+ * Type of the mnemonic backup given/received by the device during reset/recovery.
+ */
+enum BackupType {
+    Bip39 = 0;              // also called "Single Backup", see BIP-0039
+    Slip39_Basic = 1;       // also called "Shamir Backup", see SLIP-0039
+    Slip39_Advanced = 2;    // also called "Super Shamir" or "Shamir with Groups", see SLIP-0039#two-level-scheme
+}
+
+/**
  * Request: Reset device to default state and ask for device details
  * @start
  * @next Features
@@ -57,6 +66,29 @@ message Features {
     optional bytes fw_vendor_keys = 26;         // reported firmware vendor keys (their hash)
     optional bool unfinished_backup = 27;       // report unfinished backup (equals to Storage.unfinished_backup)
     optional bool no_backup = 28;               // report no backup (equals to Storage.no_backup)
+    optional bool recovery_mode = 29;           // is recovery mode in progress
+    repeated Capability capabilities = 30;      // list of supported capabilities
+    enum Capability {
+        Capability_Bitcoin = 1;
+        Capability_Bitcoin_like = 2;            // Altcoins based on the Bitcoin source code
+        Capability_Binance = 3;
+        Capability_Cardano = 4;
+        Capability_Crypto = 5;                  // generic crypto operations for GPG, SSH, etc.
+        Capability_EOS = 6;
+        Capability_Ethereum = 7;
+        Capability_Lisk = 8;
+        Capability_Monero = 9;
+        Capability_NEM = 10;
+        Capability_Ripple = 11;
+        Capability_Stellar = 12;
+        Capability_Tezos = 13;
+        Capability_U2F = 14;
+        Capability_Shamir = 15;
+        Capability_ShamirGroups = 16;
+    }
+    optional BackupType backup_type = 31;       // type of device backup (BIP-39 / SLIP-39 basic / SLIP-39 advanced)
+    optional bool sd_card_present = 32;         // is SD card present
+    optional bool sd_protection = 33;           // is SD Protect enabled
 }
 
 /**
@@ -109,6 +141,24 @@ message ApplyFlags {
  */
 message ChangePin {
     optional bool remove = 1;   // is PIN removal requested?
+}
+
+/**
+ * Request: Starts workflow for enabling/regenerating/disabling SD card protection
+ * @start
+ * @next Success
+ * @next Failure
+ */
+message SdProtect {
+    optional SdProtectOperationType operation = 1;
+    /**
+    * Structure representing SD card protection operation
+    */
+    enum SdProtectOperationType {
+        DISABLE = 0;
+        ENABLE = 1;
+        REFRESH = 2;
+    }
 }
 
 /**
@@ -165,7 +215,7 @@ message WipeDevice {
  * @next Failure
  */
 message LoadDevice {
-    optional string mnemonic = 1;                           // seed encoded as BIP-39 mnemonic (12, 18 or 24 words)
+    repeated string mnemonics = 1;                          // seed encoded as mnemonic (12, 18 or 24 words for BIP39, 20 or 33 for SLIP39)
     optional hw.trezor.messages.common.HDNodeType node = 2; // BIP-32 node
     optional string pin = 3;                                // set PIN protection
     optional bool passphrase_protection = 4;                // enable master node encryption using passphrase
@@ -191,6 +241,8 @@ message ResetDevice {
     optional uint32 u2f_counter = 7;                    // U2F counter
     optional bool skip_backup = 8;                      // postpone seed backup to BackupDevice workflow
     optional bool no_backup = 9;                        // indicate that no backup is going to be made
+    // type of the mnemonic backup
+    optional BackupType backup_type = 10 [default=Bip39];
 }
 
 /**

@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -26,6 +26,7 @@
 #include "memzero.h"
 #include "messages.h"
 #include "messages.pb.h"
+#include "oled.h"
 #include "protect.h"
 #include "rng.h"
 #include "sha2.h"
@@ -65,20 +66,36 @@ void reset_init(bool display_random, uint32_t _strength,
 
   random_buffer(int_entropy, 32);
 
-  char ent_str[4][17];
-  data2hex(int_entropy, 8, ent_str[0]);
-  data2hex(int_entropy + 8, 8, ent_str[1]);
-  data2hex(int_entropy + 16, 8, ent_str[2]);
-  data2hex(int_entropy + 24, 8, ent_str[3]);
-
   if (display_random) {
-    layoutDialogSwipe(&bmp_icon_info, _("Cancel"), _("Continue"), NULL,
-                      _("Internal entropy:"), ent_str[0], ent_str[1],
-                      ent_str[2], ent_str[3], NULL);
-    if (!protectButton(ButtonRequestType_ButtonRequest_ResetDevice, false)) {
-      fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
-      layoutHome();
-      return;
+    for (int start = 0; start < 2; start++) {
+      char ent_str[4][17] = {0};
+      char desc[] = "Internal entropy _/2:";
+      data2hex(int_entropy + start * 16, 4, ent_str[0]);
+      data2hex(int_entropy + start * 16 + 4, 4, ent_str[1]);
+      data2hex(int_entropy + start * 16 + 8, 4, ent_str[2]);
+      data2hex(int_entropy + start * 16 + 12, 4, ent_str[3]);
+      layoutLast = layoutDialogSwipe;
+      layoutSwipe();
+      desc[17] = '1' + start;
+      oledDrawStringCenter(OLED_WIDTH / 2, 0, desc, FONT_STANDARD);
+      oledDrawStringCenter(OLED_WIDTH / 2, 2 + 1 * 9, ent_str[0], FONT_FIXED);
+      oledDrawStringCenter(OLED_WIDTH / 2, 2 + 2 * 9, ent_str[1], FONT_FIXED);
+      oledDrawStringCenter(OLED_WIDTH / 2, 2 + 3 * 9, ent_str[2], FONT_FIXED);
+      oledDrawStringCenter(OLED_WIDTH / 2, 2 + 4 * 9, ent_str[3], FONT_FIXED);
+      oledHLine(OLED_HEIGHT - 13);
+      layoutButtonNo(_("Cancel"));
+      layoutButtonYes(_("Continue"));
+      // 40 is the maximum pixels used for a row
+      oledSCA(2 + 1 * 9, 2 + 1 * 9 + 6, 40);
+      oledSCA(2 + 2 * 9, 2 + 2 * 9 + 6, 40);
+      oledSCA(2 + 3 * 9, 2 + 3 * 9 + 6, 40);
+      oledSCA(2 + 4 * 9, 2 + 4 * 9 + 6, 40);
+      oledRefresh();
+      if (!protectButton(ButtonRequestType_ButtonRequest_ResetDevice, false)) {
+        fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
+        layoutHome();
+        return;
+      }
     }
   }
 
@@ -92,7 +109,7 @@ void reset_init(bool display_random, uint32_t _strength,
   config_setLabel(label);
   config_setU2FCounter(u2f_counter);
 
-  EntropyRequest resp;
+  EntropyRequest resp = {0};
   memzero(&resp, sizeof(EntropyRequest));
   msg_write(MessageType_MessageType_EntropyRequest, &resp);
   awaiting_entropy = true;
@@ -106,7 +123,7 @@ void reset_entropy(const uint8_t *ext_entropy, uint32_t len) {
   }
   awaiting_entropy = false;
 
-  SHA256_CTX ctx;
+  SHA256_CTX ctx = {0};
   sha256_Init(&ctx);
   sha256_Update(&ctx, int_entropy, 32);
   sha256_Update(&ctx, ext_entropy, len);

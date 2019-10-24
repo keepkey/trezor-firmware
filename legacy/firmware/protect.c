@@ -1,5 +1,5 @@
 /*
- * This file is part of the TREZOR project, https://trezor.io/
+ * This file is part of the Trezor project, https://trezor.io/
  *
  * Copyright (C) 2014 Pavol Rusnak <stick@satoshilabs.com>
  *
@@ -39,7 +39,7 @@ bool protectAbortedByCancel = false;
 bool protectAbortedByInitialize = false;
 
 bool protectButton(ButtonRequestType type, bool confirm_only) {
-  ButtonRequest resp;
+  ButtonRequest resp = {0};
   bool result = false;
   bool acked = false;
 #if DEBUG_LINK
@@ -112,7 +112,7 @@ bool protectButton(ButtonRequestType type, bool confirm_only) {
 }
 
 const char *requestPin(PinMatrixRequestType type, const char *text) {
-  PinMatrixRequest resp;
+  PinMatrixRequest resp = {0};
   memzero(&resp, sizeof(PinMatrixRequest));
   resp.has_type = true;
   resp.type = type;
@@ -283,7 +283,7 @@ bool protectPassphrase(void) {
     return true;
   }
 
-  PassphraseRequest resp;
+  PassphraseRequest resp = {0};
   memzero(&resp, sizeof(PassphraseRequest));
   usbTiny(1);
   msg_write(MessageType_MessageType_PassphraseRequest, &resp);
