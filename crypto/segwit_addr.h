@@ -52,6 +52,12 @@ int segwit_addr_encode(char *output, const char *hrp, int ver,
 int segwit_addr_decode(int *ver, uint8_t *prog, size_t *prog_len,
                        const char *hrp, const char *addr);
 
+/**
+ * Bit aligned Base Conversion
+ */
+int convert_bits(uint8_t* out, size_t* outlen, int outbits, const uint8_t* in,
+                 size_t inlen, int inbits, int pad);
+
 /** Encode a Bech32 string
  *
  *  Out: output:  Pointer to a buffer of size strlen(hrp) + data_len + 8 that
