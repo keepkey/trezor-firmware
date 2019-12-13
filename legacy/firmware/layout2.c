@@ -35,8 +35,6 @@
 #include "timer.h"
 #include "util.h"
 
-#define BITCOIN_DIVISIBILITY (8)
-
 #if !BITCOIN_ONLY
 
 static const char *slip44_extras(uint32_t coin_type) {
@@ -93,12 +91,12 @@ static const char *address_n_str(const uint32_t *address_n,
         abbr = coin->coin_shortcut + 1;
       }
     } else if (p2sh_segwit) {
-      if (coin && coin->has_segwit && coin->has_address_type_p2sh) {
+      if (coin && coin->has_segwit) {
         abbr = coin->coin_shortcut + 1;
       }
     } else {
       if (coin) {
-        if (coin->has_segwit && coin->has_address_type_p2sh) {
+        if (coin->has_segwit) {
           legacy = true;
         }
         abbr = coin->coin_shortcut + 1;
@@ -339,15 +337,15 @@ static void render_address_dialog(const CoinInfo *coin, const char *address,
       oledHLine(OLED_HEIGHT - 13);
     }
   }
-  layoutButtonNo(_("Cancel"));
-  layoutButtonYes(_("Confirm"));
+  layoutButtonNo(_("Cancel"), &bmp_btn_cancel);
+  layoutButtonYes(_("Confirm"), &bmp_btn_confirm);
   oledRefresh();
 }
 
 void layoutConfirmOutput(const CoinInfo *coin, const TxOutputType *out) {
   char str_out[32 + 3] = {0};
-  bn_format_uint64(out->amount, NULL, coin->coin_shortcut, BITCOIN_DIVISIBILITY,
-                   0, false, str_out, sizeof(str_out) - 3);
+  bn_format_uint64(out->amount, NULL, coin->coin_shortcut, coin->decimals, 0,
+                   false, str_out, sizeof(str_out) - 3);
   strlcat(str_out, " to", sizeof(str_out));
   const char *address = out->address;
   const char *extra_line =
@@ -389,8 +387,8 @@ void layoutConfirmOmni(const uint8_t *data, uint32_t size) {
     uint64_t amount_be = 0, amount = 0;
     memcpy(&amount_be, data + 12, sizeof(uint64_t));
     REVERSE64(amount_be, amount);
-    bn_format_uint64(amount, NULL, suffix, divisible ? BITCOIN_DIVISIBILITY : 0,
-                     0, false, str_out, sizeof(str_out));
+    bn_format_uint64(amount, NULL, suffix, divisible ? 8 : 0, 0, false, str_out,
+                     sizeof(str_out));
   } else {
     desc = _("Unknown transaction");
     str_out[0] = 0;
@@ -424,10 +422,10 @@ void layoutConfirmOpReturn(const uint8_t *data, uint32_t size) {
 void layoutConfirmTx(const CoinInfo *coin, uint64_t amount_out,
                      uint64_t amount_fee) {
   char str_out[32] = {0}, str_fee[32] = {0};
-  bn_format_uint64(amount_out, NULL, coin->coin_shortcut, BITCOIN_DIVISIBILITY,
-                   0, false, str_out, sizeof(str_out));
-  bn_format_uint64(amount_fee, NULL, coin->coin_shortcut, BITCOIN_DIVISIBILITY,
-                   0, false, str_fee, sizeof(str_fee));
+  bn_format_uint64(amount_out, NULL, coin->coin_shortcut, coin->decimals, 0,
+                   false, str_out, sizeof(str_out));
+  bn_format_uint64(amount_fee, NULL, coin->coin_shortcut, coin->decimals, 0,
+                   false, str_fee, sizeof(str_fee));
   layoutDialogSwipe(&bmp_icon_question, _("Cancel"), _("Confirm"), NULL,
                     _("Really send"), str_out, _("from your wallet?"),
                     _("Fee included:"), str_fee, NULL);
@@ -435,8 +433,8 @@ void layoutConfirmTx(const CoinInfo *coin, uint64_t amount_out,
 
 void layoutFeeOverThreshold(const CoinInfo *coin, uint64_t fee) {
   char str_fee[32] = {0};
-  bn_format_uint64(fee, NULL, coin->coin_shortcut, BITCOIN_DIVISIBILITY, 0,
-                   false, str_fee, sizeof(str_fee));
+  bn_format_uint64(fee, NULL, coin->coin_shortcut, coin->decimals, 0, false,
+                   str_fee, sizeof(str_fee));
   layoutDialogSwipe(&bmp_icon_question, _("Cancel"), _("Confirm"), NULL,
                     _("Fee"), str_fee, _("is unexpectedly high."), NULL,
                     _("Send anyway?"), NULL);
@@ -555,7 +553,7 @@ void layoutResetWord(const char *word, int pass, int word_pos, bool last) {
   // 30 is the maximum pixels used for a pixel row in the BIP39 word "abstract"
   oledSCA(4 * 9 - 3 - 2, 4 * 9 - 3 + 15 + 2, 30);
   oledInvert(0, 4 * 9 - 3 - 2, OLED_WIDTH - 1, 4 * 9 - 3 + 15 + 2);
-  layoutButtonYes(btnYes);
+  layoutButtonYes(btnYes, &bmp_btn_confirm);
   oledRefresh();
 }
 
@@ -634,10 +632,10 @@ void layoutAddress(const char *address, const char *desc, bool qrcode,
   }
 
   if (!qrcode) {
-    layoutButtonNo(_("QR Code"));
+    layoutButtonNo(_("QR Code"), NULL);
   }
 
-  layoutButtonYes(_("Continue"));
+  layoutButtonYes(_("Continue"), &bmp_btn_confirm);
   oledRefresh();
 }
 

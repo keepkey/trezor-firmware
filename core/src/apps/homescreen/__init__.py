@@ -1,11 +1,15 @@
+import storage
+import storage.device
+import storage.recovery
+import storage.sd_salt
+from storage import cache
 from trezor import config, io, utils, wire
 from trezor.messages import Capability, MessageType
 from trezor.messages.Features import Features
 from trezor.messages.Success import Success
 from trezor.wire import register
 
-from apps.common import cache, mnemonic, storage
-from apps.common.storage import device as storage_device, recovery as storage_recovery
+from apps.common import mnemonic
 
 if False:
     from typing import NoReturn
@@ -19,24 +23,24 @@ if False:
 def get_features() -> Features:
     f = Features()
     f.vendor = "trezor.io"
-    f.language = "english"
+    f.language = "en-US"
     f.major_version = utils.VERSION_MAJOR
     f.minor_version = utils.VERSION_MINOR
     f.patch_version = utils.VERSION_PATCH
     f.revision = utils.GITREV.encode()
     f.model = utils.MODEL
-    f.device_id = storage_device.get_device_id()
-    f.label = storage_device.get_label()
+    f.device_id = storage.device.get_device_id()
+    f.label = storage.device.get_label()
     f.initialized = storage.is_initialized()
     f.pin_protection = config.has_pin()
     f.pin_cached = config.has_pin()
-    f.passphrase_protection = storage_device.has_passphrase()
+    f.passphrase_protection = storage.device.has_passphrase()
     f.passphrase_cached = cache.has_passphrase()
-    f.needs_backup = storage_device.needs_backup()
-    f.unfinished_backup = storage_device.unfinished_backup()
-    f.no_backup = storage_device.no_backup()
-    f.flags = storage_device.get_flags()
-    f.recovery_mode = storage_recovery.is_in_progress()
+    f.needs_backup = storage.device.needs_backup()
+    f.unfinished_backup = storage.device.unfinished_backup()
+    f.no_backup = storage.device.no_backup()
+    f.flags = storage.device.get_flags()
+    f.recovery_mode = storage.recovery.is_in_progress()
     f.backup_type = mnemonic.get_type()
     if utils.BITCOIN_ONLY:
         f.capabilities = [
@@ -65,7 +69,8 @@ def get_features() -> Features:
             Capability.ShamirGroups,
         ]
     f.sd_card_present = io.SDCard().present()
-    f.sd_protection = storage.device.get_sd_salt_auth_key() is not None
+    f.sd_protection = storage.sd_salt.is_enabled()
+    f.wipe_code_protection = config.has_wipe_code()
     return f
 
 
@@ -104,10 +109,9 @@ async def handle_Ping(ctx: wire.Context, msg: Ping) -> Success:
     return Success(message=msg.message)
 
 
-def boot(features_only: bool = False) -> None:
+def boot() -> None:
     register(MessageType.Initialize, handle_Initialize)
     register(MessageType.GetFeatures, handle_GetFeatures)
-    if not features_only:
-        register(MessageType.Cancel, handle_Cancel)
-        register(MessageType.ClearSession, handle_ClearSession)
-        register(MessageType.Ping, handle_Ping)
+    register(MessageType.Cancel, handle_Cancel)
+    register(MessageType.ClearSession, handle_ClearSession)
+    register(MessageType.Ping, handle_Ping)

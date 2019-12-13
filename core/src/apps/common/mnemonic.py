@@ -1,8 +1,7 @@
+import storage.device
 from trezor import ui, workflow
 from trezor.crypto import bip39, slip39
 from trezor.messages import BackupType
-
-from apps.common.storage import device as storage_device
 
 if False:
     from typing import Optional, Tuple
@@ -14,11 +13,11 @@ def get() -> Tuple[Optional[bytes], int]:
 
 
 def get_secret() -> Optional[bytes]:
-    return storage_device.get_mnemonic_secret()
+    return storage.device.get_mnemonic_secret()
 
 
 def get_type() -> EnumTypeBackupType:
-    return storage_device.get_backup_type()
+    return storage.device.get_backup_type()
 
 
 def is_bip39() -> bool:
@@ -43,8 +42,8 @@ def get_seed(passphrase: str = "", progress_bar: bool = True) -> bytes:
         seed = bip39.seed(mnemonic_secret.decode(), passphrase, render_func)
 
     else:  # SLIP-39
-        identifier = storage_device.get_slip39_identifier()
-        iteration_exponent = storage_device.get_slip39_iteration_exponent()
+        identifier = storage.device.get_slip39_identifier()
+        iteration_exponent = storage.device.get_slip39_iteration_exponent()
         if identifier is None or iteration_exponent is None:
             # Identifier or exponent expected but not found
             raise RuntimeError
@@ -59,7 +58,7 @@ def _start_progress() -> None:
     # Because we are drawing to the screen manually, without a layout, we
     # should make sure that no other layout is running.  At this point, only
     # the homescreen should be on, so shut it down.
-    workflow.close_default()
+    workflow.kill_default()
     ui.backlight_fade(ui.BACKLIGHT_DIM)
     ui.display.clear()
     ui.header("Please wait")

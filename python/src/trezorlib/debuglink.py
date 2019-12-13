@@ -19,7 +19,7 @@ from copy import deepcopy
 
 from mnemonic import Mnemonic
 
-from . import messages as proto, protobuf, tools
+from . import messages as proto, protobuf
 from .client import TrezorClient
 from .tools import expect
 
@@ -181,6 +181,27 @@ class DebugUI:
 
     def button_request(self, code):
         if self.input_flow is None:
+            # XXX
+            # On Trezor T, in some rare cases, two layouts may be queuing for events at
+            # the same time.  A new workflow will first send out a ButtonRequest, wait
+            # for a ButtonAck, and only then display a layout (closing the old one).
+            # That means that if a layout that accepts debuglink decisions is currently
+            # on screen, it has a good chance of accepting the following `press_yes`
+            # before it can be closed by the newly open layout from the new workflow.
+            #
+            # This happens in particular when the recovery homescreen is on, because
+            # it is a homescreen that accepts debuglink decisions.
+            #
+            # To prevent the issue, we insert a `wait_layout`, which on TT will only
+            # return after the screen is refreshed, so we are certain that the new
+            # layout is on. On T1 it is a no-op.
+            #
+            # This could run into trouble if some workflow asks for a ButtonRequest
+            # without refreshing the screen.
+            # This will also freeze on old bridges, where Read and Write are not
+            # separate operations, because it relies on ButtonAck being sent without
+            # waiting for a response.
+            self.debuglink.wait_layout()
             self.debuglink.press_yes()
         elif self.input_flow is self.INPUT_FLOW_DONE:
             raise AssertionError("input flow ended prematurely")
@@ -429,14 +450,16 @@ class TrezorClientDebugLink(TrezorClient):
 
 
 @expect(proto.Success, field="message")
-def load_device_by_mnemonic(
+def load_device(
     client,
     mnemonic,
     pin,
     passphrase_protection,
     label,
-    language="english",
+    language="en-US",
     skip_checksum=False,
+    needs_backup=False,
+    no_backup=False,
 ):
     if not isinstance(mnemonic, (list, tuple)):
         mnemonic = [mnemonic]
@@ -456,60 +479,16 @@ def load_device_by_mnemonic(
             language=language,
             label=label,
             skip_checksum=skip_checksum,
+            needs_backup=needs_backup,
+            no_backup=no_backup,
         )
     )
     client.init_device()
     return resp
 
 
-@expect(proto.Success, field="message")
-def load_device_by_xprv(client, xprv, pin, passphrase_protection, label, language):
-    if client.features.initialized:
-        raise RuntimeError(
-            "Device is initialized already. Call wipe_device() and try again."
-        )
-
-    if xprv[0:4] not in ("xprv", "tprv"):
-        raise ValueError("Unknown type of xprv")
-
-    if not 100 < len(xprv) < 112:  # yes this is correct in Python
-        raise ValueError("Invalid length of xprv")
-
-    node = proto.HDNodeType()
-    data = tools.b58decode(xprv, None).hex()
-
-    if data[90:92] != "00":
-        raise ValueError("Contain invalid private key")
-
-    checksum = (tools.btc_hash(bytes.fromhex(data[:156]))[:4]).hex()
-    if checksum != data[156:]:
-        raise ValueError("Checksum doesn't match")
-
-    # version 0488ade4
-    # depth 00
-    # fingerprint 00000000
-    # child_num 00000000
-    # chaincode 873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508
-    # privkey   00e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35
-    # checksum e77e9d71
-
-    node.depth = int(data[8:10], 16)
-    node.fingerprint = int(data[10:18], 16)
-    node.child_num = int(data[18:26], 16)
-    node.chain_code = bytes.fromhex(data[26:90])
-    node.private_key = bytes.fromhex(data[92:156])  # skip 0x00 indicating privkey
-
-    resp = client.call(
-        proto.LoadDevice(
-            node=node,
-            pin=pin,
-            passphrase_protection=passphrase_protection,
-            language=language,
-            label=label,
-        )
-    )
-    client.init_device()
-    return resp
+# keep the old name for compatibility
+load_device_by_mnemonic = load_device
 
 
 @expect(proto.Success, field="message")

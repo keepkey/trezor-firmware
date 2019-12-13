@@ -134,6 +134,9 @@ class DummyContext:
         return await loop.race(*tasks)
 
 
+DUMMY_CONTEXT = DummyContext()
+
+
 class Context:
     def __init__(self, iface: WireInterface, sid: int) -> None:
         self.iface = iface
@@ -283,7 +286,7 @@ async def handle_session(iface: WireInterface, session_id: int) -> None:
                         "%s:%x receive: %s",
                         iface.iface_num(),
                         session_id,
-                        req_reader.type,
+                        messages.get_type(req_reader.type),
                     )
             else:
                 # We have a reader left over from earlier.  We should process
