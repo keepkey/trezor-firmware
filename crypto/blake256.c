@@ -171,7 +171,7 @@ void blake256_Update( BLAKE256_CTX *S, const uint8_t *in, size_t inlen )
             ( void * ) in, ( size_t ) inlen );
     S->buflen = left + ( int )inlen;
   }
-  else S->buflen = 0;
+  else S->buflen = left;
 }
 
 
