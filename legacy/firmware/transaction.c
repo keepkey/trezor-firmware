@@ -61,6 +61,8 @@
 /* size of a Decred witness (without script): 8 amount, 4 block height, 4 block
  * index */
 #define TXSIZE_DECRED_WITNESS 16
+/* support version of Decred script_version */
+#define DECRED_SCRIPT_VERSION 0
 
 static const uint8_t segwit_header[2] = {0, 1};
 
@@ -189,17 +191,19 @@ bool compute_address(const CoinInfo *coin, InputScriptType script_type,
   return 1;
 }
 
-int compile_output(const CoinInfo *coin, const HDNode *root, TxOutputType *in,
-                   TxOutputBinType *out, bool needs_confirm) {
+int compile_output(const CoinInfo *coin, AmountUnit amount_unit,
+                   const HDNode *root, TxOutputType *in, TxOutputBinType *out,
+                   bool needs_confirm) {
   memzero(out, sizeof(TxOutputBinType));
   out->amount = in->amount;
-  out->decred_script_version = in->decred_script_version;
+  out->decred_script_version = DECRED_SCRIPT_VERSION;
   uint8_t addr_raw[MAX_ADDR_RAW_SIZE] = {0};
   size_t addr_raw_len = 0;
 
   if (in->script_type == OutputScriptType_PAYTOOPRETURN) {
     // only 0 satoshi allowed for OP_RETURN
-    if (in->amount != 0) {
+    if (in->amount != 0 || in->has_address || (in->address_n_count > 0) ||
+        in->has_multisig) {
       return 0;  // failed to compile output
     }
     if (needs_confirm) {
@@ -325,7 +329,7 @@ int compile_output(const CoinInfo *coin, const HDNode *root, TxOutputType *in,
   }
 
   if (needs_confirm) {
-    layoutConfirmOutput(coin, in);
+    layoutConfirmOutput(coin, amount_unit, in);
     if (!protectButton(ButtonRequestType_ButtonRequest_ConfirmOutput, false)) {
       return -1;  // user aborted
     }
@@ -353,7 +357,6 @@ uint32_t compile_script_sig(uint32_t address_type, const uint8_t *pubkeyhash,
 uint32_t compile_script_multisig(const CoinInfo *coin,
                                  const MultisigRedeemScriptType *multisig,
                                  uint8_t *out) {
-  if (!multisig->has_m) return 0;
   const uint32_t m = multisig->m;
   const uint32_t n = cryptoMultisigPubkeyCount(multisig);
   if (m < 1 || m > 15) return 0;
@@ -383,7 +386,6 @@ uint32_t compile_script_multisig(const CoinInfo *coin,
 uint32_t compile_script_multisig_hash(const CoinInfo *coin,
                                       const MultisigRedeemScriptType *multisig,
                                       uint8_t *hash) {
-  if (!multisig->has_m) return 0;
   const uint32_t m = multisig->m;
   const uint32_t n = cryptoMultisigPubkeyCount(multisig);
   if (m < 1 || m > 15) return 0;
@@ -460,6 +462,22 @@ uint32_t serialize_script_multisig(const CoinInfo *coin,
 }
 
 // tx methods
+void tx_input_check_hash(Hasher *hasher, const TxInputType *input) {
+  hasher_Update(hasher, input->prev_hash.bytes, sizeof(input->prev_hash.bytes));
+  hasher_Update(hasher, (const uint8_t *)&input->prev_index,
+                sizeof(input->prev_index));
+  hasher_Update(hasher, (const uint8_t *)&input->script_type,
+                sizeof(input->script_type));
+  hasher_Update(hasher, (const uint8_t *)&input->address_n_count,
+                sizeof(input->address_n_count));
+  for (int i = 0; i < input->address_n_count; ++i)
+    hasher_Update(hasher, (const uint8_t *)&input->address_n[i],
+                  sizeof(input->address_n[0]));
+  hasher_Update(hasher, (const uint8_t *)&input->sequence,
+                sizeof(input->sequence));
+  hasher_Update(hasher, (const uint8_t *)&input->amount, sizeof(input->amount));
+  return;
+}
 
 uint32_t tx_prevout_hash(Hasher *hasher, const TxInputType *input) {
   for (int i = 0; i < 32; i++) {
@@ -503,17 +521,22 @@ uint32_t tx_serialize_script(uint32_t size, const uint8_t *data, uint8_t *out) {
 
 uint32_t tx_serialize_header(TxStruct *tx, uint8_t *out) {
   int r = 4;
-  if (tx->overwintered) {
+#if !BITCOIN_ONLY
+  if (tx->is_zcashlike && tx->version >= 3) {
     uint32_t ver = tx->version | TX_OVERWINTERED;
     memcpy(out, &ver, 4);
     memcpy(out + 4, &(tx->version_group_id), 4);
     r += 4;
-  } else {
+  } else
+#endif
+  {
     memcpy(out, &(tx->version), 4);
+#if !BITCOIN_ONLY
     if (tx->timestamp) {
       memcpy(out + r, &(tx->timestamp), 4);
       r += 4;
     }
+#endif
     if (tx->is_segwit) {
       memcpy(out + r, segwit_header, 2);
       r += 2;
@@ -524,16 +547,21 @@ uint32_t tx_serialize_header(TxStruct *tx, uint8_t *out) {
 
 uint32_t tx_serialize_header_hash(TxStruct *tx) {
   int r = 4;
-  if (tx->overwintered) {
+#if !BITCOIN_ONLY
+  if (tx->is_zcashlike && tx->version >= 3) {
     uint32_t ver = tx->version | TX_OVERWINTERED;
     hasher_Update(&(tx->hasher), (const uint8_t *)&ver, 4);
     hasher_Update(&(tx->hasher), (const uint8_t *)&(tx->version_group_id), 4);
     r += 4;
-  } else {
+  } else
+#endif
+  {
     hasher_Update(&(tx->hasher), (const uint8_t *)&(tx->version), 4);
+#if !BITCOIN_ONLY
     if (tx->timestamp) {
       hasher_Update(&(tx->hasher), (const uint8_t *)&(tx->timestamp), 4);
     }
+#endif
     if (tx->is_segwit) {
       hasher_Update(&(tx->hasher), segwit_header, 2);
       r += 2;
@@ -558,10 +586,13 @@ uint32_t tx_serialize_input(TxStruct *tx, const TxInputType *input,
   r += 32;
   memcpy(out + r, &input->prev_index, 4);
   r += 4;
+#if !BITCOIN_ONLY
   if (tx->is_decred) {
     uint8_t tree = input->decred_tree & 0xFF;
     out[r++] = tree;
-  } else {
+  } else
+#endif
+  {
     r += tx_serialize_script(input->script_sig.size, input->script_sig.bytes,
                              out + r);
   }
@@ -584,11 +615,14 @@ uint32_t tx_serialize_input_hash(TxStruct *tx, const TxInputType *input) {
     r += tx_serialize_header_hash(tx);
   }
   r += tx_prevout_hash(&(tx->hasher), input);
+#if !BITCOIN_ONLY
   if (tx->is_decred) {
     uint8_t tree = input->decred_tree & 0xFF;
     hasher_Update(&(tx->hasher), (const uint8_t *)&(tree), 1);
     r++;
-  } else {
+  } else
+#endif
+  {
     r += tx_script_hash(&(tx->hasher), input->script_sig.size,
                         input->script_sig.bytes);
   }
@@ -600,6 +634,7 @@ uint32_t tx_serialize_input_hash(TxStruct *tx, const TxInputType *input) {
   return r;
 }
 
+#if !BITCOIN_ONLY
 uint32_t tx_serialize_decred_witness(TxStruct *tx, const TxInputType *input,
                                      uint8_t *out) {
   static const uint64_t amount = 0;
@@ -614,7 +649,11 @@ uint32_t tx_serialize_decred_witness(TxStruct *tx, const TxInputType *input,
   if (tx->have_inputs == 0) {
     r += ser_length(tx->inputs_len, out + r);
   }
-  memcpy(out + r, &amount, 8);
+  if (input->has_amount) {
+    memcpy(out + r, &input->amount, 8);
+  } else {
+    memcpy(out + r, &amount, 8);
+  }
   r += 8;
   memcpy(out + r, &block_height, 4);
   r += 4;
@@ -651,6 +690,7 @@ uint32_t tx_serialize_decred_witness_hash(TxStruct *tx,
 
   return r;
 }
+#endif
 
 uint32_t tx_serialize_middle(TxStruct *tx, uint8_t *out) {
   return ser_length(tx->outputs_len, out);
@@ -662,38 +702,35 @@ uint32_t tx_serialize_middle_hash(TxStruct *tx) {
 
 uint32_t tx_serialize_footer(TxStruct *tx, uint8_t *out) {
   memcpy(out, &(tx->lock_time), 4);
-  if (tx->overwintered) {
-    if (tx->version == 3) {
-      memcpy(out + 4, &(tx->expiry), 4);
-      out[8] = 0x00;  // nJoinSplit
-      return 9;
-    } else if (tx->version == 4) {
-      memcpy(out + 4, &(tx->expiry), 4);
-      memzero(out + 8, 8);  // valueBalance
-      out[16] = 0x00;       // nShieldedSpend
-      out[17] = 0x00;       // nShieldedOutput
-      out[18] = 0x00;       // nJoinSplit
-      return 19;
-    }
+#if !BITCOIN_ONLY
+  if (tx->is_zcashlike && tx->version == 4) {
+    memcpy(out + 4, &(tx->expiry), 4);
+    memzero(out + 8, 8);  // valueBalance
+    out[16] = 0x00;       // nShieldedSpend
+    out[17] = 0x00;       // nShieldedOutput
+    out[18] = 0x00;       // nJoinSplit
+    return 19;
   }
   if (tx->is_decred) {
     memcpy(out + 4, &(tx->expiry), 4);
     return 8;
   }
+#endif
   return 4;
 }
 
 uint32_t tx_serialize_footer_hash(TxStruct *tx) {
   hasher_Update(&(tx->hasher), (const uint8_t *)&(tx->lock_time), 4);
-  if (tx->overwintered) {
+#if !BITCOIN_ONLY
+  if (tx->is_zcashlike && tx->version >= 3) {
     hasher_Update(&(tx->hasher), (const uint8_t *)&(tx->expiry), 4);
-    hasher_Update(&(tx->hasher), (const uint8_t *)"\x00", 1);  // nJoinSplit
-    return 9;
+    return 8;
   }
   if (tx->is_decred) {
     hasher_Update(&(tx->hasher), (const uint8_t *)&(tx->expiry), 4);
     return 8;
   }
+#endif
   return 4;
 }
 
@@ -713,11 +750,13 @@ uint32_t tx_serialize_output(TxStruct *tx, const TxOutputBinType *output,
   }
   memcpy(out + r, &output->amount, 8);
   r += 8;
+#if !BITCOIN_ONLY
   if (tx->is_decred) {
     uint16_t script_version = output->decred_script_version & 0xFFFF;
     memcpy(out + r, &script_version, 2);
     r += 2;
   }
+#endif
   r += tx_serialize_script(output->script_pubkey.size,
                            output->script_pubkey.bytes, out + r);
   tx->have_outputs++;
@@ -750,6 +789,7 @@ uint32_t tx_serialize_output_hash(TxStruct *tx, const TxOutputBinType *output) {
   return r;
 }
 
+#if !BITCOIN_ONLY
 uint32_t tx_serialize_extra_data_hash(TxStruct *tx, const uint8_t *data,
                                       uint32_t datalen) {
   if (tx->have_inputs < tx->inputs_len) {
@@ -769,10 +809,11 @@ uint32_t tx_serialize_extra_data_hash(TxStruct *tx, const uint8_t *data,
   tx->size += datalen;
   return datalen;
 }
+#endif
 
 void tx_init(TxStruct *tx, uint32_t inputs_len, uint32_t outputs_len,
              uint32_t version, uint32_t lock_time, uint32_t expiry,
-             uint32_t extra_data_len, HasherType hasher_sign, bool overwintered,
+             uint32_t extra_data_len, HasherType hasher_sign, bool is_zcashlike,
              uint32_t version_group_id, uint32_t timestamp) {
   tx->inputs_len = inputs_len;
   tx->outputs_len = outputs_len;
@@ -786,7 +827,7 @@ void tx_init(TxStruct *tx, uint32_t inputs_len, uint32_t outputs_len,
   tx->size = 0;
   tx->is_segwit = false;
   tx->is_decred = false;
-  tx->overwintered = overwintered;
+  tx->is_zcashlike = is_zcashlike;
   tx->version_group_id = version_group_id;
   tx->timestamp = timestamp;
   hasher_Init(&(tx->hasher), hasher_sign);
@@ -902,6 +943,7 @@ uint32_t tx_output_weight(const CoinInfo *coin, const TxOutputType *txoutput) {
   return 4 * (size + output_script_size);
 }
 
+#if !BITCOIN_ONLY
 uint32_t tx_decred_witness_weight(const TxInputType *txinput) {
   uint32_t input_script_size = tx_input_script_size(txinput);
   uint32_t size = TXSIZE_DECRED_WITNESS + ser_length_size(input_script_size) +
@@ -909,3 +951,4 @@ uint32_t tx_decred_witness_weight(const TxInputType *txinput) {
 
   return 4 * size;
 }
+#endif

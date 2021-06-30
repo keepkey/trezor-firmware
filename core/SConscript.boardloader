@@ -2,6 +2,8 @@
 
 import os
 
+TREZOR_MODEL = ARGUMENTS.get('TREZOR_MODEL', 'T')
+
 CCFLAGS_MOD = ''
 CPPPATH_MOD = []
 CPPDEFINES_MOD = []
@@ -31,27 +33,31 @@ SOURCE_MOD += [
 ]
 
 # modtrezorui
+CPPPATH_MOD += [
+        'vendor/micropython/extmod/uzlib',
+]
 SOURCE_MOD += [
     'embed/extmod/modtrezorui/display.c',
     'embed/extmod/modtrezorui/font_bitmap.c',
 ]
 
 SOURCE_STMHAL = [
+    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c',
-    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c',
+    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c',
+    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c',
-    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd.c',
+    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_sd.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_sram.c',
-    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c',
-    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c',
+    'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_fmc.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_sdmmc.c',
     'vendor/micropython/lib/stm32lib/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usb.c',
@@ -64,12 +70,14 @@ SOURCE_BOARDLOADER = [
 
 SOURCE_TREZORHAL = [
     'embed/trezorhal/common.c',
+    'embed/trezorhal/dma.c',
     'embed/trezorhal/image.c',
     'embed/trezorhal/flash.c',
     'embed/trezorhal/lowlevel.c',
     'embed/trezorhal/mini_printf.c',
     'embed/trezorhal/sdcard.c',
     'embed/trezorhal/stm32.c',
+    'embed/trezorhal/systick.c',
     'embed/trezorhal/rng.c',
     'embed/trezorhal/util.s',
     'embed/trezorhal/vectortable.s',
@@ -87,16 +95,18 @@ env.Replace(
     OBJCOPY='arm-none-eabi-objcopy', )
 
 env.Replace(
-    TREZOR_MODEL=env.get('ENV').get('TREZOR_MODEL', 'T'), )
+    TREZOR_MODEL=TREZOR_MODEL, )
 
-if env.get('TREZOR_MODEL') == 'T':
+if TREZOR_MODEL == 'T':
     CPU_ASFLAGS = '-mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16'
     CPU_CCFLAGS = '-mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mtune=cortex-m4 '
     CPU_MODEL   = 'STM32F427xx'
-else:
+elif TREZOR_MODEL == '1':
     CPU_ASFLAGS = '-mthumb -mcpu=cortex-m3 -mfloat-abi=soft'
     CPU_CCFLAGS = '-mthumb -mtune=cortex-m3 -mcpu=cortex-m3 -mfloat-abi=soft '
     CPU_MODEL   = 'STM32F405xx'
+else:
+    raise ValueError('Unknown Trezor model')
 
 env.Replace(
     COPT=env.get('ENV').get('OPTIMIZE', '-Os'),

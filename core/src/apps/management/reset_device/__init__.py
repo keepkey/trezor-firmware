@@ -2,21 +2,20 @@ import storage
 import storage.device
 from trezor import config, wire
 from trezor.crypto import bip39, hashlib, random, slip39
-from trezor.messages import BackupType
-from trezor.messages.EntropyAck import EntropyAck
-from trezor.messages.EntropyRequest import EntropyRequest
-from trezor.messages.Success import Success
-from trezor.pin import pin_to_int
+from trezor.enums import BackupType
+from trezor.messages import EntropyAck, EntropyRequest, Success
+from trezor.ui.layouts import confirm_backup, confirm_reset_device
+from trezor.ui.loader import LoadingAnimation
 
-from apps.management import backup_types
-from apps.management.change_pin import request_pin_confirm
-from apps.management.reset_device import layout
+from .. import backup_types
+from ..change_pin import request_pin_confirm
+from . import layout
 
 if __debug__:
-    from apps import debug
+    import storage.debug
 
 if False:
-    from trezor.messages.ResetDevice import ResetDevice
+    from trezor.messages import ResetDevice
 
 _DEFAULT_BACKUP_TYPE = BackupType.Bip39
 
@@ -26,18 +25,28 @@ async def reset_device(ctx: wire.Context, msg: ResetDevice) -> Success:
     _validate_reset_device(msg)
 
     # make sure user knows they're setting up a new wallet
-    await layout.show_reset_device_warning(ctx, msg.backup_type)
+    if msg.backup_type == BackupType.Slip39_Basic:
+        prompt = "Create a new wallet\nwith Shamir Backup?"
+    elif msg.backup_type == BackupType.Slip39_Advanced:
+        prompt = "Create a new wallet\nwith Super Shamir?"
+    else:
+        prompt = "Do you want to create\na new wallet?"
+    await confirm_reset_device(ctx, prompt)
+    await LoadingAnimation()
+
+    # wipe storage to make sure the device is in a clear state
+    storage.reset()
 
     # request and set new PIN
     if msg.pin_protection:
         newpin = await request_pin_confirm(ctx)
-        if not config.change_pin(pin_to_int(""), pin_to_int(newpin), None, None):
+        if not config.change_pin("", newpin, None, None):
             raise wire.ProcessError("Failed to set PIN")
 
     # generate and display internal entropy
     int_entropy = random.bytes(32)
     if __debug__:
-        debug.reset_internal_entropy = int_entropy
+        storage.debug.reset_internal_entropy = int_entropy
     if msg.display_random:
         await layout.show_internal_entropy(ctx, int_entropy)
 
@@ -65,16 +74,16 @@ async def reset_device(ctx: wire.Context, msg: ResetDevice) -> Success:
 
     # If doing backup, ask the user to confirm.
     if perform_backup:
-        perform_backup = await layout.confirm_backup(ctx)
+        perform_backup = await confirm_backup(ctx)
 
     # generate and display backup information for the master secret
     if perform_backup:
         await backup_seed(ctx, msg.backup_type, secret)
 
     # write settings and master secret into storage
-    storage.device.load_settings(
-        label=msg.label, use_passphrase=msg.passphrase_protection
-    )
+    if msg.label is not None:
+        storage.device.set_label(msg.label)
+    storage.device.set_passphrase_enabled(bool(msg.passphrase_protection))
     storage.device.store_mnemonic_secret(
         secret,  # for SLIP-39, this is the EMS
         msg.backup_type,
@@ -101,12 +110,12 @@ async def backup_slip39_basic(
     threshold = await layout.slip39_prompt_threshold(ctx, shares_count)
 
     # generate the mnemonics
-    mnemonics = slip39.generate_mnemonics_from_data(
-        encrypted_master_secret,
-        storage.device.get_slip39_identifier(),
+    mnemonics = slip39.split_ems(
         1,  # Single Group threshold
         [(threshold, shares_count)],  # Single Group threshold/count
+        storage.device.get_slip39_identifier(),
         storage.device.get_slip39_iteration_exponent(),
+        encrypted_master_secret,
     )[0]
 
     # show and confirm individual shares
@@ -136,12 +145,12 @@ async def backup_slip39_advanced(
         groups.append((share_threshold, share_count))
 
     # generate the mnemonics
-    mnemonics = slip39.generate_mnemonics_from_data(
-        encrypted_master_secret=encrypted_master_secret,
-        identifier=storage.device.get_slip39_identifier(),
+    mnemonics = slip39.split_ems(
         group_threshold=group_threshold,
         groups=groups,
+        identifier=storage.device.get_slip39_identifier(),
         iteration_exponent=storage.device.get_slip39_iteration_exponent(),
+        encrypted_master_secret=encrypted_master_secret,
     )
 
     # show and confirm individual shares
@@ -164,7 +173,7 @@ def _validate_reset_device(msg: ResetDevice) -> None:
             raise wire.ProcessError("Invalid strength (has to be 128, 192 or 256 bits)")
     if msg.display_random and (msg.skip_backup or msg.no_backup):
         raise wire.ProcessError("Can't show internal entropy when backup is skipped")
-    if storage.is_initialized():
+    if storage.device.is_initialized():
         raise wire.UnexpectedMessage("Already initialized")
 
 

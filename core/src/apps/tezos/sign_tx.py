@@ -1,27 +1,29 @@
-from micropython import const
-
 from trezor import wire
 from trezor.crypto import hashlib
 from trezor.crypto.curve import ed25519
-from trezor.messages import TezosBallotType, TezosContractType
-from trezor.messages.TezosSignedTx import TezosSignedTx
+from trezor.enums import TezosBallotType, TezosContractType
+from trezor.messages import TezosSignedTx
 
 from apps.common import paths
-from apps.common.writers import write_bytes, write_uint8, write_uint32_be
-from apps.tezos import CURVE, helpers, layout
+from apps.common.keychain import with_slip44_keychain
+from apps.common.writers import (
+    write_bytes_fixed,
+    write_bytes_unchecked,
+    write_uint8,
+    write_uint32_be,
+)
 
-PROPOSAL_LENGTH = const(32)
+from . import CURVE, PATTERNS, SLIP44_ID, helpers, layout
 
 
+@with_slip44_keychain(*PATTERNS, slip44_id=SLIP44_ID, curve=CURVE)
 async def sign_tx(ctx, msg, keychain):
-    await paths.validate_path(
-        ctx, helpers.validate_full_path, keychain, msg.address_n, CURVE
-    )
+    await paths.validate_path(ctx, keychain, msg.address_n)
 
-    node = keychain.derive(msg.address_n, CURVE)
+    node = keychain.derive(msg.address_n)
 
     if msg.transaction is not None:
-        # if the tranasction oprtation is used to execute code on a smart contract
+        # if the transaction operation is used to execute code on a smart contract
         if msg.transaction.parameters_manager is not None:
             parameters_manager = msg.transaction.parameters_manager
 
@@ -157,13 +159,20 @@ def _get_ballot(ballot):
 
 
 def _get_operation_bytes(w: bytearray, msg):
-    write_bytes(w, msg.branch)
+    write_bytes_fixed(w, msg.branch, helpers.BRANCH_HASH_SIZE)
 
     # when the account sends first operation in lifetime,
     # we need to reveal its public key
     if msg.reveal is not None:
         _encode_common(w, msg.reveal, "reveal")
-        write_bytes(w, msg.reveal.public_key)
+        tag = int(msg.reveal.public_key[0])
+
+        try:
+            public_key_size = helpers.PUBLIC_KEY_TAG_TO_SIZE[tag]
+        except KeyError:
+            raise wire.DataError("Invalid tag in public key")
+
+        write_bytes_fixed(w, msg.reveal.public_key, 1 + public_key_size)
 
     # transaction operation
     if msg.transaction is not None:
@@ -188,18 +197,28 @@ def _get_operation_bytes(w: bytearray, msg):
                 else:
                     _encode_manager_to_manager_transfer(w, parameters_manager.transfer)
         else:
-            _encode_data_with_bool_prefix(w, msg.transaction.parameters)
+            if msg.transaction.parameters:
+                helpers.write_bool(w, True)
+                helpers.check_tx_params_size(msg.transaction.parameters)
+                write_bytes_unchecked(w, msg.transaction.parameters)
+            else:
+                helpers.write_bool(w, False)
     # origination operation
     elif msg.origination is not None:
         _encode_common(w, msg.origination, "origination")
         _encode_zarith(w, msg.origination.balance)
-        _encode_data_with_bool_prefix(w, msg.origination.delegate)
-        write_bytes(w, msg.origination.script)
+        _encode_data_with_bool_prefix(
+            w, msg.origination.delegate, helpers.TAGGED_PUBKEY_HASH_SIZE
+        )
+        helpers.check_script_size(msg.origination.script)
+        write_bytes_unchecked(w, msg.origination.script)
 
     # delegation operation
     elif msg.delegation is not None:
         _encode_common(w, msg.delegation, "delegation")
-        _encode_data_with_bool_prefix(w, msg.delegation.delegate)
+        _encode_data_with_bool_prefix(
+            w, msg.delegation.delegate, helpers.TAGGED_PUBKEY_HASH_SIZE
+        )
     elif msg.proposal is not None:
         _encode_proposal(w, msg.proposal)
     elif msg.ballot is not None:
@@ -208,13 +227,13 @@ def _get_operation_bytes(w: bytearray, msg):
 
 def _encode_common(w: bytearray, operation, str_operation):
     operation_tags = {
-        "reveal": 107,
-        "transaction": 108,
-        "origination": 109,
-        "delegation": 110,
+        "reveal": helpers.OP_TAG_REVEAL,
+        "transaction": helpers.OP_TAG_TRANSACTION,
+        "origination": helpers.OP_TAG_ORIGINATION,
+        "delegation": helpers.OP_TAG_DELEGATION,
     }
     write_uint8(w, operation_tags[str_operation])
-    write_bytes(w, operation.source)
+    write_bytes_fixed(w, operation.source, helpers.TAGGED_PUBKEY_HASH_SIZE)
     _encode_zarith(w, operation.fee)
     _encode_zarith(w, operation.counter)
     _encode_zarith(w, operation.gas_limit)
@@ -223,13 +242,13 @@ def _encode_common(w: bytearray, operation, str_operation):
 
 def _encode_contract_id(w: bytearray, contract_id):
     write_uint8(w, contract_id.tag)
-    write_bytes(w, contract_id.hash)
+    write_bytes_fixed(w, contract_id.hash, helpers.CONTRACT_ID_SIZE - 1)
 
 
-def _encode_data_with_bool_prefix(w: bytearray, data):
+def _encode_data_with_bool_prefix(w: bytearray, data: bytes, expected_length: int):
     if data:
         helpers.write_bool(w, True)
-        write_bytes(w, data)
+        write_bytes_fixed(w, data, expected_length)
     else:
         helpers.write_bool(w, False)
 
@@ -247,23 +266,19 @@ def _encode_zarith(w: bytearray, num):
 
 
 def _encode_proposal(w: bytearray, proposal):
-    proposal_tag = 5
-
-    write_uint8(w, proposal_tag)
-    write_bytes(w, proposal.source)
+    write_uint8(w, helpers.OP_TAG_PROPOSALS)
+    write_bytes_fixed(w, proposal.source, helpers.TAGGED_PUBKEY_HASH_SIZE)
     write_uint32_be(w, proposal.period)
-    write_uint32_be(w, len(proposal.proposals) * PROPOSAL_LENGTH)
+    write_uint32_be(w, len(proposal.proposals) * helpers.PROPOSAL_HASH_SIZE)
     for proposal_hash in proposal.proposals:
-        write_bytes(w, proposal_hash)
+        write_bytes_fixed(w, proposal_hash, helpers.PROPOSAL_HASH_SIZE)
 
 
 def _encode_ballot(w: bytearray, ballot):
-    ballot_tag = 6
-
-    write_uint8(w, ballot_tag)
-    write_bytes(w, ballot.source)
+    write_uint8(w, helpers.OP_TAG_BALLOT)
+    write_bytes_fixed(w, ballot.source, helpers.TAGGED_PUBKEY_HASH_SIZE)
     write_uint32_be(w, ballot.period)
-    write_bytes(w, ballot.proposal)
+    write_bytes_fixed(w, ballot.proposal, helpers.PROPOSAL_HASH_SIZE)
     write_uint8(w, ballot.ballot)
 
 
@@ -284,9 +299,6 @@ def _encode_natural(w: bytearray, num):
 
 
 def _encode_manager_common(w: bytearray, sequence_length, operation, to_contract=False):
-    IMPLICIT_ADDRESS_LENGTH = 21
-    SMART_CONTRACT_ADDRESS_LENGTH = 22
-
     # 5 = tag and sequence_length (1 byte + 4 bytes)
     argument_length = sequence_length + 5
 
@@ -295,20 +307,20 @@ def _encode_manager_common(w: bytearray, sequence_length, operation, to_contract
     write_uint32_be(w, argument_length)
     write_uint8(w, helpers.MICHELSON_SEQUENCE_TAG)
     write_uint32_be(w, sequence_length)
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["DROP"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["NIL"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["operation"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES[operation])
+    helpers.write_instruction(w, "DROP")
+    helpers.write_instruction(w, "NIL")
+    helpers.write_instruction(w, "operation")
+    helpers.write_instruction(w, operation)
     if to_contract is True:
-        write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["address"])
+        helpers.write_instruction(w, "address")
     else:
-        write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["key_hash"])
+        helpers.write_instruction(w, "key_hash")
     if operation == "PUSH":
-        write_bytes(w, bytes([10]))  # byte sequence
+        write_uint8(w, 10)  # byte sequence
         if to_contract is True:
-            write_uint32_be(w, SMART_CONTRACT_ADDRESS_LENGTH)
+            write_uint32_be(w, helpers.CONTRACT_ID_SIZE)
         else:
-            write_uint32_be(w, IMPLICIT_ADDRESS_LENGTH)
+            write_uint32_be(w, helpers.TAGGED_PUBKEY_HASH_SIZE)
 
 
 def _encode_manager_to_implicit_transfer(w: bytearray, manager_transfer):
@@ -319,14 +331,16 @@ def _encode_manager_to_implicit_transfer(w: bytearray, manager_transfer):
     sequence_length = MICHELSON_LENGTH + len(value_natural)
 
     _encode_manager_common(w, sequence_length, "PUSH")
-    write_bytes(w, manager_transfer.destination.hash)
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["IMPLICIT_ACCOUNT"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["PUSH"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["mutez"])
+    write_bytes_fixed(
+        w, manager_transfer.destination.hash, helpers.TAGGED_PUBKEY_HASH_SIZE
+    )
+    helpers.write_instruction(w, "IMPLICIT_ACCOUNT")
+    helpers.write_instruction(w, "PUSH")
+    helpers.write_instruction(w, "mutez")
     _encode_natural(w, manager_transfer.amount)
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["UNIT"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["TRANSFER_TOKENS"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["CONS"])
+    helpers.write_instruction(w, "UNIT")
+    helpers.write_instruction(w, "TRANSFER_TOKENS")
+    helpers.write_instruction(w, "CONS")
 
 
 # smart_contract_delegation
@@ -334,17 +348,17 @@ def _encode_manager_delegation(w: bytearray, delegate):
     MICHELSON_LENGTH = 42  # length is fixed this time(no variable length fields)
 
     _encode_manager_common(w, MICHELSON_LENGTH, "PUSH")
-    write_bytes(w, delegate)
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["SOME"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["SET_DELEGATE"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["CONS"])
+    write_bytes_fixed(w, delegate, helpers.TAGGED_PUBKEY_HASH_SIZE)
+    helpers.write_instruction(w, "SOME")
+    helpers.write_instruction(w, "SET_DELEGATE")
+    helpers.write_instruction(w, "CONS")
 
 
 def _encode_manager_delegation_remove(w: bytearray):
     MICHELSON_LENGTH = 14  # length is fixed this time(no variable length fields)
     _encode_manager_common(w, MICHELSON_LENGTH, "NONE")
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["SET_DELEGATE"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["CONS"])
+    helpers.write_instruction(w, "SET_DELEGATE")
+    helpers.write_instruction(w, "CONS")
 
 
 def _encode_manager_to_manager_transfer(w: bytearray, manager_transfer):
@@ -356,12 +370,12 @@ def _encode_manager_to_manager_transfer(w: bytearray, manager_transfer):
 
     _encode_manager_common(w, sequence_length, "PUSH", to_contract=True)
     _encode_contract_id(w, manager_transfer.destination)
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["CONTRACT"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["unit"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["ASSERT_SOME"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["PUSH"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["mutez"])
+    helpers.write_instruction(w, "CONTRACT")
+    helpers.write_instruction(w, "unit")
+    helpers.write_instruction(w, "ASSERT_SOME")
+    helpers.write_instruction(w, "PUSH")
+    helpers.write_instruction(w, "mutez")
     _encode_natural(w, manager_transfer.amount)
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["UNIT"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["TRANSFER_TOKENS"])
-    write_bytes(w, helpers.MICHELSON_INSTRUCTION_BYTES["CONS"])
+    helpers.write_instruction(w, "UNIT")
+    helpers.write_instruction(w, "TRANSFER_TOKENS")
+    helpers.write_instruction(w, "CONS")

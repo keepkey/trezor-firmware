@@ -13,30 +13,29 @@ def consteq(sec: bytes, pub: bytes) -> bool:
 
 # extmod/modtrezorutils/modtrezorutils.c
 def memcpy(
-    dst: bytearray, dst_ofs: int, src: bytes, src_ofs: int, n: int
+    dst: bytearray | memoryview,
+    dst_ofs: int,
+    src: bytes,
+    src_ofs: int,
+    n: int | None = None,
 ) -> int:
     """
     Copies at most `n` bytes from `src` at offset `src_ofs` to
-    `dst` at offset `dst_ofs`.  Returns the number of actually
-    copied bytes.
+    `dst` at offset `dst_ofs`. Returns the number of actually
+    copied bytes. If `n` is not specified, tries to copy
+    as much as possible.
     """
 
 
 # extmod/modtrezorutils/modtrezorutils.c
-def halt(msg: str = None) -> None:
+def halt(msg: str | None = None) -> None:
     """
     Halts execution.
     """
-
-
-# extmod/modtrezorutils/modtrezorutils.c
-def set_mode_unprivileged() -> None:
-    """
-    Set unprivileged mode.
-    """
-GITREV: str
+SCM_REVISION: bytes
 VERSION_MAJOR: int
 VERSION_MINOR: int
 VERSION_PATCH: int
 MODEL: str
 EMULATOR: bool
+BITCOIN_ONLY: bool

@@ -1,18 +1,20 @@
-from trezor.messages.StellarAccountMergeOp import StellarAccountMergeOp
-from trezor.messages.StellarAllowTrustOp import StellarAllowTrustOp
-from trezor.messages.StellarAssetType import StellarAssetType
-from trezor.messages.StellarBumpSequenceOp import StellarBumpSequenceOp
-from trezor.messages.StellarChangeTrustOp import StellarChangeTrustOp
-from trezor.messages.StellarCreateAccountOp import StellarCreateAccountOp
-from trezor.messages.StellarCreatePassiveOfferOp import StellarCreatePassiveOfferOp
-from trezor.messages.StellarManageDataOp import StellarManageDataOp
-from trezor.messages.StellarManageOfferOp import StellarManageOfferOp
-from trezor.messages.StellarPathPaymentOp import StellarPathPaymentOp
-from trezor.messages.StellarPaymentOp import StellarPaymentOp
-from trezor.messages.StellarSetOptionsOp import StellarSetOptionsOp
+from trezor.messages import (
+    StellarAccountMergeOp,
+    StellarAllowTrustOp,
+    StellarAssetType,
+    StellarBumpSequenceOp,
+    StellarChangeTrustOp,
+    StellarCreateAccountOp,
+    StellarCreatePassiveOfferOp,
+    StellarManageDataOp,
+    StellarManageOfferOp,
+    StellarPathPaymentOp,
+    StellarPaymentOp,
+    StellarSetOptionsOp,
+)
 from trezor.wire import ProcessError
 
-from apps.stellar import consts, writers
+from .. import consts, writers
 
 
 def write_account_merge_op(w, msg: StellarAccountMergeOp):
@@ -119,7 +121,7 @@ def write_set_options_op(w, msg: StellarSetOptionsOp):
     elif msg.signer_type in consts.SIGN_TYPES:
         writers.write_bool(w, True)
         writers.write_uint32(w, msg.signer_type)
-        writers.write_bytes(w, msg.signer_key)
+        writers.write_bytes_fixed(w, msg.signer_key, 32)
         writers.write_uint32(w, msg.signer_weight)
     else:
         raise ProcessError("Stellar: unknown signer type")
@@ -146,10 +148,10 @@ def _write_asset_code(w, asset_type: int, asset_code: str):
         return  # nothing is needed
     elif asset_type == consts.ASSET_TYPE_ALPHANUM4:
         # pad with zeros to 4 chars
-        writers.write_bytes(w, code + bytearray([0] * (4 - len(code))))
+        writers.write_bytes_fixed(w, code + bytearray([0] * (4 - len(code))), 4)
     elif asset_type == consts.ASSET_TYPE_ALPHANUM12:
         # pad with zeros to 12 chars
-        writers.write_bytes(w, code + bytearray([0] * (12 - len(code))))
+        writers.write_bytes_fixed(w, code + bytearray([0] * (12 - len(code))), 12)
     else:
         raise ProcessError("Stellar: invalid asset type")
 

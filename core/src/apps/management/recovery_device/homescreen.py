@@ -2,37 +2,33 @@ import storage
 import storage.device
 import storage.recovery
 import storage.recovery_shares
-from trezor import utils, wire, workflow
+from trezor import strings, utils, wire, workflow
 from trezor.crypto import slip39
 from trezor.crypto.hashlib import sha256
+from trezor.enums import BackupType, MessageType
 from trezor.errors import MnemonicError
-from trezor.messages import BackupType
-from trezor.messages.Success import Success
-
-from . import recover
+from trezor.messages import Success
+from trezor.ui.layouts import show_success
 
 from apps.common import mnemonic
-from apps.common.layout import show_success
 from apps.homescreen.homescreen import homescreen
-from apps.management import backup_types
-from apps.management.recovery_device import layout
 
-if False:
-    from typing import Optional, Tuple
-    from trezor.messages.ResetDevice import EnumTypeBackupType
+from .. import backup_types
+from . import layout, recover
 
 
 async def recovery_homescreen() -> None:
     if not storage.recovery.is_in_progress():
-        workflow.replace_default(homescreen)
+        workflow.set_default(homescreen)
         return
 
     # recovery process does not communicate on the wire
-    ctx = wire.DummyContext()
+    ctx = wire.DUMMY_CONTEXT
     await recovery_process(ctx)
 
 
 async def recovery_process(ctx: wire.GenericContext) -> Success:
+    wire.AVOID_RESTARTING_FOR = (MessageType.Initialize, MessageType.GetFeatures)
     try:
         return await _continue_recovery_process(ctx)
     except recover.RecoveryAborted:
@@ -41,7 +37,7 @@ async def recovery_process(ctx: wire.GenericContext) -> Success:
             storage.recovery.end_progress()
         else:
             storage.wipe()
-        raise wire.ActionCancelled("Cancelled")
+        raise wire.ActionCancelled
 
 
 async def _continue_recovery_process(ctx: wire.GenericContext) -> Success:
@@ -95,7 +91,7 @@ async def _continue_recovery_process(ctx: wire.GenericContext) -> Success:
 
 
 async def _finish_recovery_dry_run(
-    ctx: wire.GenericContext, secret: bytes, backup_type: EnumTypeBackupType
+    ctx: wire.GenericContext, secret: bytes, backup_type: BackupType
 ) -> Success:
     if backup_type is None:
         raise RuntimeError
@@ -117,18 +113,18 @@ async def _finish_recovery_dry_run(
             == storage.recovery.get_slip39_iteration_exponent()
         )
 
-    await layout.show_dry_run_result(ctx, result, is_slip39)
-
     storage.recovery.end_progress()
 
+    await layout.show_dry_run_result(ctx, result, is_slip39)
+
     if result:
-        return Success("The seed is valid and matches the one in the device")
+        return Success(message="The seed is valid and matches the one in the device")
     else:
         raise wire.ProcessError("The seed does not match the one in the device")
 
 
 async def _finish_recovery(
-    ctx: wire.GenericContext, secret: bytes, backup_type: EnumTypeBackupType
+    ctx: wire.GenericContext, secret: bytes, backup_type: BackupType
 ) -> Success:
     if backup_type is None:
         raise RuntimeError
@@ -147,7 +143,9 @@ async def _finish_recovery(
 
     storage.recovery.end_progress()
 
-    await show_success(ctx, ("You have successfully", "recovered your wallet."))
+    await show_success(
+        ctx, "success_recovery", "You have successfully recovered your wallet."
+    )
     return Success(message="Device recovered")
 
 
@@ -161,13 +159,13 @@ async def _request_word_count(ctx: wire.GenericContext, dry_run: bool) -> int:
 
 async def _process_words(
     ctx: wire.GenericContext, words: str
-) -> Tuple[Optional[bytes], EnumTypeBackupType]:
+) -> tuple[bytes | None, BackupType]:
     word_count = len(words.split(" "))
     is_slip39 = backup_types.is_slip39_word_count(word_count)
 
     share = None
     if not is_slip39:  # BIP-39
-        secret = recover.process_bip39(words)  # type: Optional[bytes]
+        secret: bytes | None = recover.process_bip39(words)
     else:
         secret, share = recover.process_slip39(words)
 
@@ -213,10 +211,7 @@ async def _request_share_next_screen(ctx: wire.GenericContext) -> None:
             ctx, content, "Enter", _show_remaining_groups_and_shares
         )
     else:
-        if remaining[0] == 1:
-            text = "1 more share"
-        else:
-            text = "%d more shares" % remaining[0]
+        text = strings.format_plural("{count} more {plural}", remaining[0], "share")
         content = layout.RecoveryHomescreen(text, "needed to enter")
         await layout.homescreen_dialog(ctx, content, "Enter share")
 

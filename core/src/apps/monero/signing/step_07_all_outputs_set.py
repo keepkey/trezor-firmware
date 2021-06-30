@@ -8,34 +8,37 @@ import gc
 
 from trezor import utils
 
-from .state import State
-
-from apps.monero.layout import confirms
-from apps.monero.signing import get_monero_rct_type
+from apps.monero import layout
 from apps.monero.xmr import crypto
 
+from .state import State
 
-async def all_outputs_set(state: State):
+if False:
+    from trezor.messages import MoneroTransactionAllOutSetAck
+
+
+async def all_outputs_set(state: State) -> MoneroTransactionAllOutSetAck:
     state.mem_trace(0)
 
-    await confirms.transaction_step(state, state.STEP_ALL_OUT)
+    await layout.transaction_step(state, state.STEP_ALL_OUT)
     state.mem_trace(1)
 
     _validate(state)
     state.is_processing_offloaded = False
     state.mem_trace(2)
 
-    _set_tx_extra(state)
+    extra_b = _set_tx_extra(state)
     # tx public keys not needed anymore
     state.additional_tx_public_keys = None
     state.tx_pub = None
+    state.rsig_grouping = None
+    state.rsig_offload = None
     gc.collect()
     state.mem_trace(3)
 
     # Completes the transaction prefix hash by including extra
-    _set_tx_prefix(state)
-    extra_b = state.tx.extra
-    state.tx = None
+    _set_tx_prefix(state, extra_b)
+    state.output_change = None
     gc.collect()
     state.mem_trace(4)
 
@@ -43,25 +46,29 @@ async def all_outputs_set(state: State):
     # transaction prefix matches expected transaction prefix sent in the
     # init step.
 
-    from trezor.messages.MoneroRingCtSig import MoneroRingCtSig
-    from trezor.messages.MoneroTransactionAllOutSetAck import (
-        MoneroTransactionAllOutSetAck,
-    )
+    from trezor.messages import MoneroRingCtSig
+    from trezor.messages import MoneroTransactionAllOutSetAck
 
     # Initializes RCTsig structure (fee, tx prefix hash, type)
     rv_pb = MoneroRingCtSig(
         txn_fee=state.fee,
         message=state.tx_prefix_hash,
-        rv_type=get_monero_rct_type(state.bp_version),
+        rv_type=state.tx_type,
     )
 
     _out_pk(state)
     state.full_message_hasher.rctsig_base_done()
-    state.current_output_index = -1
+    state.current_output_index = None
     state.current_input_index = -1
 
     state.full_message = state.full_message_hasher.get_digest()
     state.full_message_hasher = None
+    state.output_pk_commitments = None
+    state.summary_outs_money = None
+    state.summary_inputs_money = None
+    state.fee = None
+    state.last_ki = None
+    state.last_step = state.STEP_ALL_OUT
 
     return MoneroTransactionAllOutSetAck(
         extra=extra_b,
@@ -72,6 +79,8 @@ async def all_outputs_set(state: State):
 
 
 def _validate(state: State):
+    if state.last_step != state.STEP_OUT:
+        raise ValueError("Invalid state transition")
     if state.current_output_index + 1 != state.output_count:
         raise ValueError("Invalid out num")
 
@@ -93,7 +102,7 @@ def _validate(state: State):
         )
 
 
-def _set_tx_extra(state: State):
+def _set_tx_extra(state: State) -> bytes:
     """
     Sets tx public keys into transaction's extra.
     Extra field is supposed to be sorted (by sort_tx_extra() in the Monero)
@@ -136,10 +145,10 @@ def _set_tx_extra(state: State):
         utils.memcpy(extra, offset, state.extra_nonce, 0, len(state.extra_nonce))
         state.extra_nonce = None
 
-    state.tx.extra = extra
+    return extra
 
 
-def _set_tx_prefix(state: State):
+def _set_tx_prefix(state: State, extra: bytes):
     """
     Adds `extra` to the tx_prefix_hash, which is the last needed item,
     so the tx_prefix_hash is now complete and can be incorporated
@@ -147,8 +156,8 @@ def _set_tx_prefix(state: State):
     """
     # Serializing "extra" type as BlobType.
     # uvarint(len(extra)) || extra
-    state.tx_prefix_hasher.uvarint(len(state.tx.extra))
-    state.tx_prefix_hasher.buffer(state.tx.extra)
+    state.tx_prefix_hasher.uvarint(len(extra))
+    state.tx_prefix_hasher.buffer(extra)
 
     state.tx_prefix_hash = state.tx_prefix_hasher.get_digest()
     state.tx_prefix_hasher = None

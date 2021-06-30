@@ -16,8 +16,8 @@
 
 from datetime import datetime
 
-from . import messages
-from .tools import CallException, b58decode, expect, session
+from . import exceptions, messages
+from .tools import b58decode, expect, session
 
 
 def name_to_number(name):
@@ -291,18 +291,19 @@ def parse_action(action):
 
 
 def parse_transaction_json(transaction):
-    header = messages.EosTxHeader()
-    header.expiration = int(
-        (
-            datetime.strptime(transaction["expiration"], "%Y-%m-%dT%H:%M:%S")
-            - datetime(1970, 1, 1)
-        ).total_seconds()
+    header = messages.EosTxHeader(
+        expiration=int(
+            (
+                datetime.strptime(transaction["expiration"], "%Y-%m-%dT%H:%M:%S")
+                - datetime(1970, 1, 1)
+            ).total_seconds()
+        ),
+        ref_block_num=int(transaction["ref_block_num"]),
+        ref_block_prefix=int(transaction["ref_block_prefix"]),
+        max_net_usage_words=int(transaction["max_net_usage_words"]),
+        max_cpu_usage_ms=int(transaction["max_cpu_usage_ms"]),
+        delay_sec=int(transaction["delay_sec"]),
     )
-    header.ref_block_num = int(transaction["ref_block_num"])
-    header.ref_block_prefix = int(transaction["ref_block_prefix"])
-    header.max_net_usage_words = int(transaction["max_net_usage_words"])
-    header.max_cpu_usage_ms = int(transaction["max_cpu_usage_ms"])
-    header.delay_sec = int(transaction["delay_sec"])
 
     actions = [parse_action(a) for a in transaction["actions"]]
 
@@ -337,12 +338,13 @@ def sign_tx(client, address, transaction, chain_id):
             response = client.call(actions.pop(0))
     except IndexError:
         # pop from empty list
-        raise CallException(
-            "Eos.UnexpectedEndOfOperations",
-            "Reached end of operations without a signature.",
+        raise exceptions.TrezorException(
+            "Reached end of operations without a signature."
         ) from None
 
     if not isinstance(response, messages.EosSignedTx):
-        raise CallException(messages.FailureType.UnexpectedMessage, response)
+        raise exceptions.TrezorException(
+            "Unexpected message: {}".format(response.__class__.__name__)
+        )
 
     return response

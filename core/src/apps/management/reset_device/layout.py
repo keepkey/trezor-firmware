@@ -2,68 +2,35 @@ import ubinascii
 
 from trezor import ui, utils
 from trezor.crypto import random
-from trezor.messages import BackupType, ButtonRequestType
-from trezor.ui.button import Button, ButtonDefault
-from trezor.ui.checklist import Checklist
-from trezor.ui.info import InfoConfirm
-from trezor.ui.loader import LoadingAnimation
-from trezor.ui.num_input import NumInput
-from trezor.ui.scroll import Paginated
-from trezor.ui.text import Text
+from trezor.enums import BackupType, ButtonRequestType
+from trezor.ui.components.tt.button import Button, ButtonDefault
+from trezor.ui.components.tt.checklist import Checklist
+from trezor.ui.components.tt.info import InfoConfirm
+from trezor.ui.components.tt.num_input import NumInput
+from trezor.ui.components.tt.scroll import Paginated
+from trezor.ui.components.tt.text import Text
+from trezor.ui.layouts import confirm_action, confirm_hex, show_success, show_warning
 
-from apps.common.confirm import confirm, hold_to_confirm, require_confirm
-from apps.common.layout import show_success
+from apps.common.confirm import confirm, require_hold_to_confirm
+
+if False:
+    from trezor import loop
 
 if __debug__:
     from apps import debug
 
 
 async def show_internal_entropy(ctx, entropy: bytes):
-    entropy_str = ubinascii.hexlify(entropy).decode()
-    lines = utils.chunks(entropy_str, 16)
-    text = Text("Internal entropy", ui.ICON_RESET)
-    text.mono(*lines)
-    await require_confirm(ctx, text, ButtonRequestType.ResetDevice)
-
-
-async def confirm_backup(ctx):
-    # First prompt
-    text = Text("Success", ui.ICON_CONFIRM, ui.GREEN, new_lines=False)
-    text.bold("New wallet created")
-    text.br()
-    text.bold("successfully!")
-    text.br()
-    text.br_half()
-    text.normal("You should back up your")
-    text.br()
-    text.normal("new wallet right now.")
-    if await confirm(
+    await confirm_hex(
         ctx,
-        text,
-        ButtonRequestType.ResetDevice,
-        cancel="Skip",
-        confirm="Back up",
-        major_confirm=True,
-    ):
-        return True
-
-    # If the user selects Skip, ask again
-    text = Text("Warning", ui.ICON_WRONG, ui.RED, new_lines=False)
-    text.bold("Are you sure you want")
-    text.br()
-    text.bold("to skip the backup?")
-    text.br()
-    text.br_half()
-    text.normal("You can back up your")
-    text.br()
-    text.normal("Trezor once, at any time.")
-    return await confirm(
-        ctx,
-        text,
-        ButtonRequestType.ResetDevice,
-        cancel="Skip",
-        confirm="Back up",
-        major_confirm=True,
+        "entropy",
+        "Internal entropy",
+        data=ubinascii.hexlify(entropy).decode(),
+        icon=ui.ICON_RESET,
+        icon_color=ui.ORANGE_ICON,
+        width=16,
+        br_code=ButtonRequestType.ResetDevice,
+        truncate=True,  # 32 bytes always fits
     )
 
 
@@ -127,7 +94,9 @@ async def _show_share_words(ctx, share_words, share_index=None, group_index=None
     utils.ensure(share_words == shares_words_check)
 
     # confirm the share
-    await hold_to_confirm(ctx, paginated, ButtonRequestType.ResetDevice)
+    await require_hold_to_confirm(
+        ctx, paginated, ButtonRequestType.ResetDevice, cancel=False
+    )
 
 
 def _split_share_into_pages(share_words):
@@ -137,7 +106,7 @@ def _split_share_into_pages(share_words):
     if length == 12 or length == 20 or length == 24:
         middle = share[2:-2]
         last = share[-2:]  # two words on the last page
-    elif length == 33:
+    elif length == 33 or length == 18:
         middle = share[2:]
         last = []  # no words at the last page, because it does not add up
     else:
@@ -182,11 +151,7 @@ async def _confirm_word(ctx, share_index, share_words, offset, count, group_inde
 
     # let the user pick a word
     select = MnemonicWordSelect(choices, share_index, checked_index, count, group_index)
-    if __debug__:
-        selected_word = await ctx.wait(select, debug.input_signal())
-    else:
-        selected_word = await ctx.wait(select)
-
+    selected_word = await ctx.wait(select)
     # confirm it is the correct one
     return selected_word == checked_word
 
@@ -195,74 +160,69 @@ async def _show_confirmation_success(
     ctx, share_index=None, num_of_shares=None, group_index=None
 ):
     if share_index is None:  # it is a BIP39 backup
-        subheader = ("You have finished", "verifying your", "recovery seed.")
-        text = []
+        subheader = "You have finished\nverifying your\nrecovery seed."
+        text = ""
 
     elif share_index == num_of_shares - 1:
         if group_index is None:
-            subheader = ("You have finished", "verifying your", "recovery shares.")
+            subheader = "You have finished\nverifying your\nrecovery shares."
         else:
             subheader = (
-                "You have finished",
-                "verifying your",
-                "recovery shares",
-                "for group %s." % (group_index + 1),
+                "You have finished\nverifying your\nrecovery shares\nfor group %s."
+                % (group_index + 1)
             )
-        text = []
+        text = ""
 
     else:
         if group_index is None:
-            subheader = (
-                "Recovery share #%s" % (share_index + 1),
-                "checked successfully.",
-            )
-            text = ["Continue with share #%s." % (share_index + 2)]
+            subheader = "Recovery share #%s\nchecked successfully." % (share_index + 1)
+            text = "Continue with share #%s." % (share_index + 2)
         else:
-            subheader = (
-                "Group %s - Share %s" % ((group_index + 1), (share_index + 1)),
-                "checked successfully.",
+            subheader = "Group %s - Share %s\nchecked successfully." % (
+                (group_index + 1),
+                (share_index + 1),
             )
-            text = ("Continue with the next ", "share.")
+            text = "Continue with the next\nshare."
 
-    return await show_success(ctx, text, subheader=subheader)
+    return await show_success(ctx, "success_recovery", text, subheader=subheader)
 
 
 async def _show_confirmation_failure(ctx, share_index):
     if share_index is None:
-        text = Text("Recovery seed", ui.ICON_WRONG, ui.RED)
+        header = "Recovery seed"
     else:
-        text = Text("Recovery share #%s" % (share_index + 1), ui.ICON_WRONG, ui.RED)
-    text.bold("That is the wrong word.")
-    text.normal("Please check again.")
-    await require_confirm(
-        ctx, text, ButtonRequestType.ResetDevice, confirm="Check again", cancel=None
+        header = "Recovery share #%s" % (share_index + 1)
+    await show_warning(
+        ctx,
+        "warning_backup_check",
+        header=header,
+        subheader="That is the wrong word.",
+        content="Please check again.",
+        button="Check again",
+        br_code=ButtonRequestType.ResetDevice,
     )
 
 
 async def show_backup_warning(ctx, slip39=False):
-    text = Text("Caution", ui.ICON_NOCOPY)
     if slip39:
-        text.normal(
-            "Never make a digital",
-            "copy of your recovery",
-            "shares and never upload",
-            "them online!",
-        )
+        description = "Never make a digital copy of your recovery shares and never upload them online!"
     else:
-        text.normal(
-            "Never make a digital",
-            "copy of your recovery",
-            "seed and never upload",
-            "it online!",
-        )
-    await require_confirm(
-        ctx, text, ButtonRequestType.ResetDevice, "I understand", cancel=None
+        description = "Never make a digital copy of your recovery seed and never upload\nit online!"
+    await confirm_action(
+        ctx,
+        "backup_warning",
+        "Caution",
+        description=description,
+        verb="I understand",
+        verb_cancel=None,
+        icon=ui.ICON_NOCOPY,
+        br_code=ButtonRequestType.ResetDevice,
     )
 
 
 async def show_backup_success(ctx):
-    text = ("Use your backup", "when you need to", "recover your wallet.")
-    await show_success(ctx, text, subheader=["Your backup is done."])
+    text = "Use your backup\nwhen you need to\nrecover your wallet."
+    await show_success(ctx, "success_backup", text, subheader="Your backup is done.")
 
 
 # BIP39
@@ -522,10 +482,10 @@ class Slip39NumInput(ui.Component):
     SET_GROUP_THRESHOLD = object()
 
     def __init__(self, step, count, min_count, max_count, group_id=None):
+        super().__init__()
         self.step = step
         self.input = NumInput(count, min_count=min_count, max_count=max_count)
         self.input.on_change = self.on_change
-        self.repaint = True
         self.group_id = group_id
 
     def dispatch(self, event, x, y):
@@ -560,12 +520,9 @@ class Slip39NumInput(ui.Component):
                 else:
                     first_line_text = "Set the total number of"
                     second_line_text = "shares in Group %s." % (self.group_id + 1)
-                ui.display.text(
-                    12, 130, first_line_text, ui.NORMAL, ui.FG, ui.BG, ui.WIDTH - 12
-                )
-                ui.display.text(
-                    12, 156, second_line_text, ui.NORMAL, ui.FG, ui.BG, ui.WIDTH - 12
-                )
+                ui.display.bar(0, 110, ui.WIDTH, 52, ui.BG)
+                ui.display.text(12, 130, first_line_text, ui.NORMAL, ui.FG, ui.BG)
+                ui.display.text(12, 156, second_line_text, ui.NORMAL, ui.FG, ui.BG)
             elif self.step is Slip39NumInput.SET_THRESHOLD:
                 if self.group_id is None:
                     first_line_text = "For recovery you need"
@@ -578,29 +535,22 @@ class Slip39NumInput(ui.Component):
                 else:
                     first_line_text = "The required number of "
                     second_line_text = "shares to form Group %s." % (self.group_id + 1)
+                ui.display.bar(0, 110, ui.WIDTH, 52, ui.BG)
                 ui.display.text(12, 130, first_line_text, ui.NORMAL, ui.FG, ui.BG)
-                ui.display.text(
-                    12, 156, second_line_text, ui.NORMAL, ui.FG, ui.BG, ui.WIDTH - 12
-                )
+                ui.display.text(12, 156, second_line_text, ui.NORMAL, ui.FG, ui.BG)
             elif self.step is Slip39NumInput.SET_GROUPS:
+                ui.display.bar(0, 110, ui.WIDTH, 52, ui.BG)
                 ui.display.text(
                     12, 130, "A group is made up of", ui.NORMAL, ui.FG, ui.BG
                 )
-                ui.display.text(
-                    12, 156, "recovery shares.", ui.NORMAL, ui.FG, ui.BG, ui.WIDTH - 12
-                )
+                ui.display.text(12, 156, "recovery shares.", ui.NORMAL, ui.FG, ui.BG)
             elif self.step is Slip39NumInput.SET_GROUP_THRESHOLD:
+                ui.display.bar(0, 110, ui.WIDTH, 52, ui.BG)
                 ui.display.text(
                     12, 130, "The required number of", ui.NORMAL, ui.FG, ui.BG
                 )
                 ui.display.text(
-                    12,
-                    156,
-                    "groups for recovery.",
-                    ui.NORMAL,
-                    ui.FG,
-                    ui.BG,
-                    ui.WIDTH - 12,
+                    12, 156, "groups for recovery.", ui.NORMAL, ui.FG, ui.BG
                 )
 
             self.repaint = False
@@ -613,6 +563,7 @@ class MnemonicWordSelect(ui.Layout):
     NUM_OF_CHOICES = 3
 
     def __init__(self, words, share_index, word_index, count, group_index=None):
+        super().__init__()
         self.words = words
         self.share_index = share_index
         self.word_index = word_index
@@ -645,29 +596,8 @@ class MnemonicWordSelect(ui.Layout):
 
     if __debug__:
 
-        def read_content(self):
+        def read_content(self) -> list[str]:
             return self.text.read_content() + [b.text for b in self.buttons]
 
-
-async def show_reset_device_warning(ctx, backup_type: BackupType = BackupType.Bip39):
-    text = Text("Create new wallet", ui.ICON_RESET, new_lines=False)
-    if backup_type == BackupType.Slip39_Basic:
-        text.bold("Create a new wallet")
-        text.br()
-        text.bold("with Shamir Backup?")
-    elif backup_type == BackupType.Slip39_Advanced:
-        text.bold("Create a new wallet")
-        text.br()
-        text.bold("with Super Shamir?")
-    else:
-        text.bold("Do you want to create")
-        text.br()
-        text.bold("a new wallet?")
-    text.br()
-    text.br_half()
-    text.normal("By continuing you agree")
-    text.br()
-    text.normal("to")
-    text.bold("https://trezor.io/tos")
-    await require_confirm(ctx, text, ButtonRequestType.ResetDevice, major_confirm=True)
-    await LoadingAnimation()
+        def create_tasks(self) -> tuple[loop.Task, ...]:
+            return super().create_tasks() + (debug.input_signal(),)

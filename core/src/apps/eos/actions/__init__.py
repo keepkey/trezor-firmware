@@ -1,10 +1,9 @@
 from trezor.crypto.hashlib import sha256
-from trezor.messages.EosTxActionAck import EosTxActionAck
-from trezor.messages.EosTxActionRequest import EosTxActionRequest
+from trezor.messages import EosTxActionAck, EosTxActionRequest
 from trezor.utils import HashWriter
 
-from apps.eos import helpers, writers
-from apps.eos.actions import layout
+from .. import helpers, writers
+from . import layout
 
 if False:
     from trezor import wire
@@ -67,18 +66,17 @@ async def process_action(
         await process_unknown_action(ctx, w, action)
 
     writers.write_action_common(sha, action.common)
-    writers.write_variant32(sha, len(w))
-    writers.write_bytes(sha, w)
+    writers.write_bytes_prefixed(sha, w)
 
 
 async def process_unknown_action(
     ctx: wire.Context, w: Writer, action: EosTxActionAck
 ) -> None:
     checksum = HashWriter(sha256())
-    writers.write_variant32(checksum, action.unknown.data_size)
+    writers.write_uvarint(checksum, action.unknown.data_size)
     checksum.extend(action.unknown.data_chunk)
 
-    writers.write_bytes(w, action.unknown.data_chunk)
+    writers.write_bytes_unchecked(w, action.unknown.data_chunk)
     bytes_left = action.unknown.data_size - len(action.unknown.data_chunk)
 
     while bytes_left != 0:
@@ -90,7 +88,7 @@ async def process_unknown_action(
             raise ValueError("Bad response. Unknown struct expected.")
 
         checksum.extend(action.unknown.data_chunk)
-        writers.write_bytes(w, action.unknown.data_chunk)
+        writers.write_bytes_unchecked(w, action.unknown.data_chunk)
 
         bytes_left -= len(action.unknown.data_chunk)
         if bytes_left < 0:

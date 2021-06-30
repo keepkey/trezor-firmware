@@ -17,6 +17,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/// package: trezorio.__init__
+
 /// class WebUSB:
 ///     """
 ///     USB WebUSB interface configuration.
@@ -31,6 +33,7 @@ typedef struct _mp_obj_WebUSB_t {
 ///     iface_num: int,
 ///     ep_in: int,
 ///     ep_out: int,
+///     emu_port: int,
 ///     subclass: int = 0,
 ///     protocol: int = 0,
 ///     polling_interval: int = 1,
@@ -51,26 +54,31 @@ STATIC mp_obj_t mod_trezorio_WebUSB_make_new(const mp_obj_type_t *type,
       {MP_QSTR_ep_out,
        MP_ARG_REQUIRED | MP_ARG_KW_ONLY | MP_ARG_INT,
        {.u_int = 0}},
+      {MP_QSTR_emu_port,
+       MP_ARG_REQUIRED | MP_ARG_KW_ONLY | MP_ARG_INT,
+       {.u_int = 0}},
       {MP_QSTR_subclass, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 0}},
       {MP_QSTR_protocol, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 0}},
       {MP_QSTR_polling_interval, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 1}},
       {MP_QSTR_max_packet_len, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 64}},
   };
-  mp_arg_val_t vals[MP_ARRAY_SIZE(allowed_args)];
+  mp_arg_val_t vals[MP_ARRAY_SIZE(allowed_args)] = {0};
   mp_arg_parse_all_kw_array(n_args, n_kw, args, MP_ARRAY_SIZE(allowed_args),
                             allowed_args, vals);
 
   const mp_int_t iface_num = vals[0].u_int;
   const mp_int_t ep_in = vals[1].u_int;
   const mp_int_t ep_out = vals[2].u_int;
-  const mp_int_t subclass = vals[3].u_int;
-  const mp_int_t protocol = vals[4].u_int;
-  const mp_int_t polling_interval = vals[5].u_int;
-  const mp_int_t max_packet_len = vals[6].u_int;
+  const mp_int_t emu_port = vals[3].u_int;
+  const mp_int_t subclass = vals[4].u_int;
+  const mp_int_t protocol = vals[5].u_int;
+  const mp_int_t polling_interval = vals[6].u_int;
+  const mp_int_t max_packet_len = vals[7].u_int;
 
   CHECK_PARAM_RANGE(iface_num, 0, 32)
   CHECK_PARAM_RANGE(ep_in, 0, 255)
   CHECK_PARAM_RANGE(ep_out, 0, 255)
+  CHECK_PARAM_RANGE(emu_port, 0, 65535)
   CHECK_PARAM_RANGE(subclass, 0, 255)
   CHECK_PARAM_RANGE(protocol, 0, 255)
   CHECK_PARAM_RANGE(polling_interval, 1, 255)
@@ -81,8 +89,12 @@ STATIC mp_obj_t mod_trezorio_WebUSB_make_new(const mp_obj_type_t *type,
 
   o->info.rx_buffer = m_new(uint8_t, max_packet_len);
   o->info.iface_num = (uint8_t)(iface_num);
+#ifdef TREZOR_EMULATOR
+  o->info.emu_port = (uint16_t)(emu_port);
+#else
   o->info.ep_in = (uint8_t)(ep_in);
   o->info.ep_out = (uint8_t)(ep_out);
+#endif
   o->info.subclass = (uint8_t)(subclass);
   o->info.protocol = (uint8_t)(protocol);
   o->info.polling_interval = (uint8_t)(polling_interval);
@@ -108,7 +120,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorio_WebUSB_iface_num_obj,
 ///     """
 STATIC mp_obj_t mod_trezorio_WebUSB_write(mp_obj_t self, mp_obj_t msg) {
   mp_obj_WebUSB_t *o = MP_OBJ_TO_PTR(self);
-  mp_buffer_info_t buf;
+  mp_buffer_info_t buf = {0};
   mp_get_buffer_raise(msg, &buf, MP_BUFFER_READ);
   ssize_t r = usb_webusb_write(o->info.iface_num, buf.buf, buf.len);
   return MP_OBJ_NEW_SMALL_INT(r);

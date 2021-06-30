@@ -146,11 +146,9 @@ static void recovery_request(void) {
   WordRequest resp = {0};
   memzero(&resp, sizeof(WordRequest));
   resp.has_type = true;
-  resp.type = awaiting_word == 1
-                  ? WordRequestType_WordRequestType_Plain
-                  : (word_index % 4 == 3)
-                        ? WordRequestType_WordRequestType_Matrix6
-                        : WordRequestType_WordRequestType_Matrix9;
+  resp.type = awaiting_word == 1      ? WordRequestType_WordRequestType_Plain
+              : (word_index % 4 == 3) ? WordRequestType_WordRequestType_Matrix6
+                                      : WordRequestType_WordRequestType_Matrix9;
   msg_write(MessageType_MessageType_WordRequest, &resp);
 }
 
@@ -482,7 +480,8 @@ void recovery_init(uint32_t _word_count, bool passphrase_protection,
   if (!dry_run) {
     layoutDialogSwipe(&bmp_icon_question, _("Cancel"), _("Confirm"), NULL,
                       _("Do you really want to"), _("recover the device?"),
-                      NULL, NULL, NULL, NULL);
+                      NULL, _("By continuing you"), _("agree to trezor.io/tos"),
+                      NULL);
     if (!protectButton(ButtonRequestType_ButtonRequest_ProtectCall, false)) {
       fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
       layoutHome();

@@ -6,7 +6,7 @@ These tests are doing a simple read/write operations on the device to see if the
 
 ## Device tests
 
-Device tests are integration tests that can be run against either emulator or on an actual device. 
+Device tests are integration tests that can be run against either emulator or on an actual device.
 You are responsible to provide either an emulator or a device with Debug mode present.
 
 ### Device tests
@@ -14,6 +14,12 @@ You are responsible to provide either an emulator or a device with Debug mode pr
 The original version of device tests. These tests can be run against both Model One and Model T.
 
 See [device-tests.md](device-tests.md) for instructions how to run it.
+
+### UI tests
+
+UI tests use device tests and take screenshots of every screen change and compare  them against fixtures. Currently for model T only.
+
+See [ui-tests.md](ui-tests.md) for more info.
 
 ### Click tests
 

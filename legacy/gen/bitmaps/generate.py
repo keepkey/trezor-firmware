@@ -11,7 +11,7 @@ imgs = []
 
 def encode_pixels(img):
     r = ""
-    img = [(x[0] + x[1] + x[2] > 384 and "1" or "0") for x in img]
+    img = ["1" if x >= 128 else "0" for x in img]
     for i in range(len(img) // 8):
         c = "".join(img[i * 8 : i * 8 + 8])
         r += "0x%02x, " % int(c, 2)
@@ -25,7 +25,7 @@ for fn in sorted(glob.glob("*.png")):
     name = os.path.splitext(fn)[0]
     w, h = im.size
     if w % 8 != 0:
-        raise Exception("Width must be divisable by 8! (%s is %dx%d)" % (fn, w, h))
+        raise Exception("Width must be divisible by 8! (%s is %dx%d)" % (fn, w, h))
     img = list(im.getdata())
     hdrs.append("extern const BITMAP bmp_%s;\n" % name)
     imgs.append("const BITMAP bmp_%s = {%d, %d, bmp_%s_data};\n" % (name, w, h, name))

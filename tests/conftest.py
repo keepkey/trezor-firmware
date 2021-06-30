@@ -21,10 +21,11 @@ import pytest
 from trezorlib import debuglink, log
 from trezorlib.debuglink import TrezorClientDebugLink
 from trezorlib.device import apply_settings, wipe as wipe_device
-from trezorlib.messages.PassphraseSourceType import HOST as PASSPHRASE_ON_HOST
 from trezorlib.transport import enumerate_devices, get_transport
 
+from . import ui_tests
 from .device_handler import BackgroundDeviceHandler
+from .ui_tests.reporting import testreport
 
 
 def get_device():
@@ -72,6 +73,7 @@ def client(request):
     try:
         client = get_device()
     except RuntimeError:
+        request.session.shouldstop = "No debuggable Trezor is available"
         pytest.fail("No debuggable Trezor is available")
 
     if request.node.get_closest_marker("skip_t2") and client.features.model == "T":
@@ -79,19 +81,28 @@ def client(request):
     if request.node.get_closest_marker("skip_t1") and client.features.model == "1":
         pytest.skip("Test excluded on Trezor 1")
 
-    if (
-        request.node.get_closest_marker("sd_card")
-        and not client.features.sd_card_present
-    ):
+    sd_marker = request.node.get_closest_marker("sd_card")
+    if sd_marker and not client.features.sd_card_present:
         raise RuntimeError(
             "This test requires SD card.\n"
             "To skip all such tests, run:\n"
             "  pytest -m 'not sd_card' <test path>"
         )
 
+    test_ui = request.config.getoption("ui")
+    run_ui_tests = not request.node.get_closest_marker("skip_ui") and test_ui
+
+    client.open()
+    if run_ui_tests:
+        # we need to reseed before the wipe
+        client.debug.reseed(0)
+
+    if sd_marker:
+        should_format = sd_marker.kwargs.get("formatted", True)
+        client.debug.erase_sd_card(format=should_format)
+
     wipe_device(client)
 
-    # fmt: off
     setup_params = dict(
         uninitialized=False,
         mnemonic=" ".join(["all"] * 12),
@@ -100,36 +111,115 @@ def client(request):
         needs_backup=False,
         no_backup=False,
     )
-    # fmt: on
 
     marker = request.node.get_closest_marker("setup_client")
     if marker:
         setup_params.update(marker.kwargs)
 
-    if not setup_params["uninitialized"]:
-        if setup_params["pin"] is True:
-            setup_params["pin"] = "1234"
+    use_passphrase = setup_params["passphrase"] is True or isinstance(
+        setup_params["passphrase"], str
+    )
 
+    if not setup_params["uninitialized"]:
         debuglink.load_device(
             client,
             mnemonic=setup_params["mnemonic"],
             pin=setup_params["pin"],
-            passphrase_protection=setup_params["passphrase"],
+            passphrase_protection=use_passphrase,
             label="test",
             language="en-US",
             needs_backup=setup_params["needs_backup"],
             no_backup=setup_params["no_backup"],
         )
-        if setup_params["passphrase"] and client.features.model != "1":
-            apply_settings(client, passphrase_source=PASSPHRASE_ON_HOST)
 
-        if setup_params["pin"]:
-            # ClearSession locks the device. We only do that if the PIN is set.
-            client.clear_session()
+        if client.features.model == "T":
+            apply_settings(client, experimental_features=True)
 
-    client.open()
-    yield client
+        if use_passphrase and isinstance(setup_params["passphrase"], str):
+            client.use_passphrase(setup_params["passphrase"])
+
+        client.clear_session()
+
+    if run_ui_tests:
+        with ui_tests.screen_recording(client, request):
+            yield client
+    else:
+        yield client
+
     client.close()
+
+
+def pytest_sessionstart(session):
+    ui_tests.read_fixtures()
+    if session.config.getoption("ui") == "test":
+        testreport.clear_dir()
+
+
+def _should_write_ui_report(exitstatus):
+    # generate UI report and check missing only if pytest is exitting cleanly
+    # I.e., the test suite passed or failed (as opposed to ctrl+c break, internal error,
+    # etc.)
+    return exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if not _should_write_ui_report(exitstatus):
+        return
+
+    missing = session.config.getoption("ui_check_missing")
+    if session.config.getoption("ui") == "test":
+        if missing and ui_tests.list_missing():
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        ui_tests.write_fixtures_suggestion(missing)
+        testreport.index()
+    if session.config.getoption("ui") == "record":
+        ui_tests.write_fixtures(missing)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    println = terminalreporter.write_line
+    println("")
+
+    ui_option = config.getoption("ui")
+    missing_tests = ui_tests.list_missing()
+    if ui_option and _should_write_ui_report(exitstatus) and missing_tests:
+        println(f"{len(missing_tests)} expected UI tests did not run.")
+        if config.getoption("ui_check_missing"):
+            println("-------- List of missing tests follows: --------")
+            for test in missing_tests:
+                println("\t" + test)
+
+            if ui_option == "test":
+                println("UI test failed.")
+            elif ui_option == "record":
+                println("Removing missing tests from record.")
+            println("")
+
+    if ui_option == "test" and _should_write_ui_report(exitstatus):
+        println("\n-------- Suggested fixtures.json diff: --------")
+        print("See", ui_tests.SUGGESTION_FILE)
+        println("")
+
+    if _should_write_ui_report(exitstatus):
+        println("-------- UI tests summary: --------")
+        println("Run ./tests/show_results.py to open test summary")
+        println("")
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--ui",
+        action="store",
+        choices=["test", "record"],
+        help="Enable UI intergration tests: 'record' or 'test'",
+    )
+    parser.addoption(
+        "--ui-check-missing",
+        action="store_true",
+        default=False,
+        help="Check UI fixtures are containing the appropriate test cases (fails on `test`,"
+        "deletes old ones on `record`).",
+    )
 
 
 def pytest_configure(config):
@@ -143,6 +233,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         'setup_client(mnemonic="all all all...", pin=None, passphrase=False, uninitialized=False): configure the client instance',
+    )
+    config.addinivalue_line(
+        "markers", "skip_ui: skip UI integration checks for this test"
     )
     with open(os.path.join(os.path.dirname(__file__), "REGISTERED_MARKERS")) as f:
         for line in f:
@@ -167,6 +260,15 @@ def pytest_runtest_setup(item):
         pytest.skip("Skipping altcoin test")
 
 
+def pytest_runtest_teardown(item):
+    """Called after a test item finishes.
+
+    Dumps the current UI test report HTML.
+    """
+    if item.session.config.getoption("ui") == "test":
+        testreport.index()
+
+
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     # Make test results available in fixtures.
@@ -183,7 +285,12 @@ def device_handler(client, request):
     device_handler = BackgroundDeviceHandler(client)
     yield device_handler
 
-    # make sure all background tasks are done
+    # if test did not finish, e.g. interrupted by Ctrl+C, the pytest_runtest_makereport
+    # did not create the attribute we need
+    if not hasattr(request.node, "rep_call"):
+        return
+
+    # if test finished, make sure all background tasks are done
     finalized_ok = device_handler.check_finalize()
     if request.node.rep_call.passed and not finalized_ok:
         raise RuntimeError("Test did not check result of background task")

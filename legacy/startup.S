@@ -21,7 +21,7 @@ memset_reg:
 reset_handler:
 
 #if MEMORY_PROTECT
-// we need to perform this in case an old bootloader
+// we need to perform this in case an old bootloader (<1.8.0)
 // is starting the new firmware, these will be set incorrectly
   ldr r0, =0xE000ED08  // r0 = VTOR address
   ldr r1, =0x08010400  // r1 = FLASH_APP_START
@@ -31,6 +31,9 @@ reset_handler:
   dsb
   isb
 #endif
+
+  ldr r0, =_stay_in_bootloader_flag_addr  // r0 - address of storage for "stay in bootloader" flag
+  ldr r11, [r0]        // r11 - keep in register and hope it gets to main
 
   ldr r0, =_ram_start // r0 - point to beginning of SRAM
   ldr r1, =_ram_end   // r1 - point to byte after the end of SRAM

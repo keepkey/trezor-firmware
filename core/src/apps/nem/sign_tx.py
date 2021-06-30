@@ -1,27 +1,28 @@
+from trezor import wire
 from trezor.crypto.curve import ed25519
-from trezor.messages.NEMSignedTx import NEMSignedTx
-from trezor.messages.NEMSignTx import NEMSignTx
+from trezor.messages import NEMSignedTx, NEMSignTx
 
 from apps.common import seed
+from apps.common.keychain import with_slip44_keychain
 from apps.common.paths import validate_path
-from apps.nem import CURVE, mosaic, multisig, namespace, transfer
-from apps.nem.helpers import NEM_HASH_ALG, check_path
-from apps.nem.validators import validate
+
+from . import CURVE, PATTERNS, SLIP44_ID, mosaic, multisig, namespace, transfer
+from .helpers import NEM_HASH_ALG, check_path
+from .validators import validate
 
 
+@with_slip44_keychain(*PATTERNS, slip44_id=SLIP44_ID, curve=CURVE)
 async def sign_tx(ctx, msg: NEMSignTx, keychain):
     validate(msg)
 
     await validate_path(
         ctx,
-        check_path,
         keychain,
         msg.transaction.address_n,
-        CURVE,
-        network=msg.transaction.network,
+        check_path(msg.transaction.address_n, msg.transaction.network),
     )
 
-    node = keychain.derive(msg.transaction.address_n, CURVE)
+    node = keychain.derive(msg.transaction.address_n)
 
     if msg.multisig:
         public_key = msg.multisig.signer
@@ -52,7 +53,7 @@ async def sign_tx(ctx, msg: NEMSignTx, keychain):
             ctx, public_key, common, msg.importance_transfer
         )
     else:
-        raise ValueError("No transaction provided")
+        raise wire.DataError("No transaction provided")
 
     if msg.multisig:
         # wrap transaction in multisig wrapper
@@ -70,7 +71,7 @@ async def sign_tx(ctx, msg: NEMSignTx, keychain):
 
     signature = ed25519.sign(node.private_key(), tx, NEM_HASH_ALG)
 
-    resp = NEMSignedTx()
-    resp.data = tx
-    resp.signature = signature
-    return resp
+    return NEMSignedTx(
+        data=tx,
+        signature=signature,
+    )

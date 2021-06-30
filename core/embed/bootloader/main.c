@@ -26,7 +26,7 @@
 #include "image.h"
 #include "mini_printf.h"
 #include "mpu.h"
-#include "rng.h"
+#include "random_delays.h"
 #include "secbool.h"
 #include "touch.h"
 #include "usb.h"
@@ -50,8 +50,8 @@ static const uint8_t * const BOOTLOADER_KEYS[] = {
 
 #define USB_IFACE_NUM 0
 
-static void usb_init_all(void) {
-  static const usb_dev_info_t dev_info = {
+static void usb_init_all(secbool usb21_landing) {
+  usb_dev_info_t dev_info = {
       .device_class = 0x00,
       .device_subclass = 0x00,
       .device_protocol = 0x00,
@@ -63,7 +63,7 @@ static void usb_init_all(void) {
       .serial_number = "000000000000000000000000",
       .interface = "TREZOR Interface",
       .usb21_enabled = sectrue,
-      .usb21_landing = sectrue,
+      .usb21_landing = usb21_landing,
   };
 
   static uint8_t rx_buffer[USB_PACKET_SIZE];
@@ -88,7 +88,9 @@ static void usb_init_all(void) {
 
 static secbool bootloader_usb_loop(const vendor_header *const vhdr,
                                    const image_header *const hdr) {
-  usb_init_all();
+  // if both are NULL, we don't have a firmware installed
+  // let's show a webusb landing page in this case
+  usb_init_all((vhdr == NULL && hdr == NULL) ? sectrue : secfalse);
 
   uint8_t buf[USB_PACKET_SIZE];
 
@@ -118,7 +120,7 @@ static secbool bootloader_usb_loop(const vendor_header *const vhdr,
         int response = ui_user_input(INPUT_CONFIRM | INPUT_CANCEL);
         if (INPUT_CANCEL == response) {
           ui_fadeout();
-          ui_screen_info(secfalse, vhdr, hdr);
+          ui_screen_firmware_info(vhdr, hdr);
           ui_fadein();
           send_user_abort(USB_IFACE_NUM, "Wipe cancelled");
           break;
@@ -234,7 +236,8 @@ static void check_bootloader_version(void) {
 #endif
 
 int main(void) {
-  drbg_init();
+  random_delays_init();
+  // display_init_seq();
   touch_init();
   touch_power_on();
 
@@ -243,8 +246,6 @@ int main(void) {
 #if PRODUCTION
   check_bootloader_version();
 #endif
-
-main_start:
 
   display_clear();
 
@@ -260,11 +261,11 @@ main_start:
 
   vendor_header vhdr;
   image_header hdr;
-  secbool firmware_present;
+  secbool stay_in_bootloader = secfalse;  // flag to stay in bootloader
 
   // detect whether the devices contains a valid firmware
 
-  firmware_present =
+  secbool firmware_present =
       load_vendor_header_keys((const uint8_t *)FIRMWARE_START, &vhdr);
   if (sectrue == firmware_present) {
     firmware_present = check_vendor_keys_lock(&vhdr);
@@ -285,19 +286,19 @@ main_start:
     // show intro animation
 
     // no ui_fadeout(); - we already start from black screen
-    ui_screen_first();
+    ui_screen_welcome_first();
     ui_fadein();
 
     hal_delay(1000);
 
     ui_fadeout();
-    ui_screen_second();
+    ui_screen_welcome_second();
     ui_fadein();
 
     hal_delay(1000);
 
     ui_fadeout();
-    ui_screen_third();
+    ui_screen_welcome_third();
     ui_fadein();
 
     // erase storage
@@ -308,44 +309,14 @@ main_start:
     if (bootloader_usb_loop(NULL, NULL) != sectrue) {
       return 1;
     }
-  } else
-      // ... or if user touched the screen on start
-      if (touched) {
-    // show firmware info with connect buttons
+  }
 
+  // ... or if user touched the screen on start
+  // ... or we have stay_in_bootloader flag to force it
+  if (touched || stay_in_bootloader == sectrue) {
     // no ui_fadeout(); - we already start from black screen
-    ui_screen_info(sectrue, &vhdr, &hdr);
+    ui_screen_firmware_info(&vhdr, &hdr);
     ui_fadein();
-
-    for (;;) {
-      int response = ui_user_input(INPUT_CONFIRM | INPUT_CANCEL | INPUT_INFO);
-      ui_fadeout();
-
-      // if cancel was pressed -> restart
-      if (INPUT_CANCEL == response) {
-        goto main_start;
-      }
-
-      // if confirm was pressed -> jump out
-      if (INPUT_CONFIRM == response) {
-        // show firmware info without connect buttons
-        ui_screen_info(secfalse, &vhdr, &hdr);
-        ui_fadein();
-        break;
-      }
-
-      // if info icon was pressed -> show fingerprint
-      if (INPUT_INFO == response) {
-        // show fingerprint
-        ui_screen_info_fingerprint(&hdr);
-        ui_fadein();
-        while (INPUT_LONG_CONFIRM != ui_user_input(INPUT_LONG_CONFIRM)) {
-        }
-        ui_fadeout();
-        ui_screen_info(sectrue, &vhdr, &hdr);
-        ui_fadein();
-      }
-    }
 
     // and start the usb loop
     if (bootloader_usb_loop(&vhdr, &hdr) != sectrue) {

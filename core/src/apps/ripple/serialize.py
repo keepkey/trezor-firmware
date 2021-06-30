@@ -8,7 +8,7 @@
 # the actual data follow. This currently only supports the Payment
 # transaction type and the fields that are required for it.
 
-from trezor.messages.RippleSignTx import RippleSignTx
+from trezor.messages import RippleSignTx
 
 from . import helpers
 
@@ -63,9 +63,9 @@ def write(w: bytearray, field: dict, value):
     elif field["type"] == FIELD_TYPE_AMOUNT:
         w.extend(serialize_amount(value))
     elif field["type"] == FIELD_TYPE_ACCOUNT:
-        write_bytes(w, helpers.decode_address(value))
+        write_bytes_varint(w, helpers.decode_address(value))
     elif field["type"] == FIELD_TYPE_VL:
-        write_bytes(w, value)
+        write_bytes_varint(w, value)
     else:
         raise ValueError("Unknown field type")
 
@@ -91,7 +91,7 @@ def serialize_amount(value: int) -> bytearray:
     return b
 
 
-def write_bytes(w: bytearray, value: bytes):
+def write_bytes_varint(w: bytearray, value: bytes):
     """Serialize a variable length bytes."""
     write_varint(w, len(value))
     w.extend(value)
@@ -124,4 +124,4 @@ def rshift(val, n):
     Implements signed right-shift.
     See: http://stackoverflow.com/a/5833119/15677
     """
-    return (val % 0x100000000) >> n
+    return (val % 0x1_0000_0000) >> n

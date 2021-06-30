@@ -17,12 +17,42 @@
 import pytest
 
 from trezorlib import btc, messages as proto
-from trezorlib.ckd_public import deserialize
 from trezorlib.tools import H_, parse_path
 
-from ..tx_cache import tx_cache
+from ..bip32 import deserialize
+from ..tx_cache import TxCache
+from .signtx import request_finished, request_input, request_meta, request_output
 
-TX_API = tx_cache("Testnet")
+B = proto.ButtonRequestType
+TX_API = TxCache("Testnet")
+
+TXHASH_20912f = bytes.fromhex(
+    "20912f98ea3ed849042efed0fdac8cb4fc301961c5988cba56902d8ffb61c337"
+)
+TXHASH_091446 = bytes.fromhex(
+    "09144602765ce3dd8f4329445b20e3684e948709c5cdcaf12da3bb079c99448a"
+)
+TXHASH_65b811 = bytes.fromhex(
+    "65b811d3eca0fe6915d9f2d77c86c5a7f19bf66b1b1253c2c51cb4ae5f0c017b"
+)
+TXHASH_e5040e = bytes.fromhex(
+    "e5040e1bc1ae7667ffb9e5248e90b2fb93cd9150234151ce90e14ab2f5933bcd"
+)
+TXHASH_9c3192 = bytes.fromhex(
+    "9c31922be756c06d02167656465c8dc83bb553bf386a3f478ae65b5c021002be"
+)
+TXHASH_f41cbe = bytes.fromhex(
+    "f41cbedd8becee05a830f418d13aa665125464547db5c7a6cd28f21639fe1228"
+)
+TXHASH_c93480 = bytes.fromhex(
+    "c9348040bbc2024e12dcb4a0b4806b0398646b91acf314da028c3f03dd0179fc"
+)
+TXHASH_31bc1c = bytes.fromhex(
+    "31bc1c88ce6ae337a6b3057a16d5bad0b561ad1dfc047d0a7fbb8814668f91e5"
+)
+TXHASH_a345b8 = bytes.fromhex(
+    "a345b85759b385c6446055e4c3baa77e8161a65009dc009489b48aa6587ce348"
+)
 
 
 class TestMsgSigntxSegwitNative:
@@ -31,9 +61,7 @@ class TestMsgSigntxSegwitNative:
             address_n=parse_path("49'/1'/0'/1/0"),
             # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
             amount=123456789,
-            prev_hash=bytes.fromhex(
-                "20912f98ea3ed849042efed0fdac8cb4fc301961c5988cba56902d8ffb61c337"
-            ),
+            prev_hash=TXHASH_20912f,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDP2SHWITNESS,
         )
@@ -50,38 +78,22 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(1),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_20912f),
+                    request_input(0, TXHASH_20912f),
+                    request_output(0, TXHASH_20912f),
+                    request_output(1, TXHASH_20912f),
+                    request_input(0),
+                    request_output(0),
+                    request_output(1),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -98,9 +110,7 @@ class TestMsgSigntxSegwitNative:
             address_n=parse_path("49'/1'/0'/1/0"),
             # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
             amount=123456789,
-            prev_hash=bytes.fromhex(
-                "20912f98ea3ed849042efed0fdac8cb4fc301961c5988cba56902d8ffb61c337"
-            ),
+            prev_hash=TXHASH_20912f,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDP2SHWITNESS,
         )
@@ -117,37 +127,21 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(1),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_20912f),
+                    request_input(0, TXHASH_20912f),
+                    request_output(0, TXHASH_20912f),
+                    request_output(1, TXHASH_20912f),
+                    request_input(0),
+                    request_output(0),
+                    request_output(1),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -163,9 +157,7 @@ class TestMsgSigntxSegwitNative:
         inp1 = proto.TxInputType(
             address_n=parse_path("84'/1'/0'/0/0"),
             amount=12300000,
-            prev_hash=bytes.fromhex(
-                "09144602765ce3dd8f4329445b20e3684e948709c5cdcaf12da3bb079c99448a"
-            ),
+            prev_hash=TXHASH_091446,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDWITNESS,
         )
@@ -182,38 +174,22 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(1),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_091446),
+                    request_input(0, TXHASH_091446),
+                    request_output(0, TXHASH_091446),
+                    request_output(1, TXHASH_091446),
+                    request_input(0),
+                    request_output(0),
+                    request_output(1),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -229,9 +205,7 @@ class TestMsgSigntxSegwitNative:
         inp1 = proto.TxInputType(
             address_n=parse_path("84'/1'/0'/0/0"),
             amount=12300000,
-            prev_hash=bytes.fromhex(
-                "09144602765ce3dd8f4329445b20e3684e948709c5cdcaf12da3bb079c99448a"
-            ),
+            prev_hash=TXHASH_091446,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDWITNESS,
         )
@@ -248,37 +222,21 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(1),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_091446),
+                    request_input(0, TXHASH_091446),
+                    request_output(0, TXHASH_091446),
+                    request_output(1, TXHASH_091446),
+                    request_input(0),
+                    request_output(0),
+                    request_output(1),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -295,18 +253,14 @@ class TestMsgSigntxSegwitNative:
             address_n=parse_path("49'/1'/0'/1/0"),
             # 2N1LGaGg836mqSQqiuUBLfcyGBhyZbremDX
             amount=111145789,
-            prev_hash=bytes.fromhex(
-                "09144602765ce3dd8f4329445b20e3684e948709c5cdcaf12da3bb079c99448a"
-            ),
+            prev_hash=TXHASH_091446,
             prev_index=1,
             script_type=proto.InputScriptType.SPENDP2SHWITNESS,
         )
         inp2 = proto.TxInputType(
             address_n=parse_path("84'/1'/0'/1/0"),
             amount=7289000,
-            prev_hash=bytes.fromhex(
-                "65b811d3eca0fe6915d9f2d77c86c5a7f19bf66b1b1253c2c51cb4ae5f0c017b"
-            ),
+            prev_hash=TXHASH_65b811,
             prev_index=1,
             script_type=proto.InputScriptType.SPENDWITNESS,
         )
@@ -331,59 +285,33 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=2),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=2),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=1),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_input(1),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(1),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(2),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_091446),
+                    request_input(0, TXHASH_091446),
+                    request_output(0, TXHASH_091446),
+                    request_output(1, TXHASH_091446),
+                    request_input(1),
+                    request_meta(TXHASH_65b811),
+                    request_input(0, TXHASH_65b811),
+                    request_output(0, TXHASH_65b811),
+                    request_output(1, TXHASH_65b811),
+                    request_input(0),
+                    request_input(1),
+                    request_output(0),
+                    request_output(1),
+                    request_output(2),
+                    request_input(0),
+                    request_input(1),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -398,7 +326,9 @@ class TestMsgSigntxSegwitNative:
     @pytest.mark.multisig
     def test_send_multisig_1(self, client):
         nodes = [
-            btc.get_public_node(client, parse_path("49'/1'/%d'" % index))
+            btc.get_public_node(
+                client, parse_path(f"49'/1'/{index}'"), coin_name="Testnet"
+            )
             for index in range(1, 4)
         ]
         multisig = proto.MultisigRedeemScriptType(
@@ -410,9 +340,7 @@ class TestMsgSigntxSegwitNative:
 
         inp1 = proto.TxInputType(
             address_n=parse_path("49'/1'/1'/0/0"),
-            prev_hash=bytes.fromhex(
-                "9c31922be756c06d02167656465c8dc83bb553bf386a3f478ae65b5c021002be"
-            ),
+            prev_hash=TXHASH_9c3192,
             prev_index=1,
             script_type=proto.InputScriptType.SPENDP2SHWITNESS,
             multisig=multisig,
@@ -428,29 +356,19 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_9c3192),
+                    request_input(0, TXHASH_9c3192),
+                    request_output(0, TXHASH_9c3192),
+                    request_output(1, TXHASH_9c3192),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             signatures, _ = btc.sign_tx(
@@ -462,29 +380,19 @@ class TestMsgSigntxSegwitNative:
             inp1.address_n[2] = H_(3)
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_9c3192),
+                    request_input(0, TXHASH_9c3192),
+                    request_output(0, TXHASH_9c3192),
+                    request_output(1, TXHASH_9c3192),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -499,7 +407,9 @@ class TestMsgSigntxSegwitNative:
     @pytest.mark.multisig
     def test_send_multisig_2(self, client):
         nodes = [
-            btc.get_public_node(client, parse_path("84'/1'/%d'" % index))
+            btc.get_public_node(
+                client, parse_path(f"84'/1'/{index}'"), coin_name="Testnet"
+            )
             for index in range(1, 4)
         ]
         multisig = proto.MultisigRedeemScriptType(
@@ -511,9 +421,7 @@ class TestMsgSigntxSegwitNative:
 
         inp1 = proto.TxInputType(
             address_n=parse_path("84'/1'/2'/0/1"),
-            prev_hash=bytes.fromhex(
-                "f41cbedd8becee05a830f418d13aa665125464547db5c7a6cd28f21639fe1228"
-            ),
+            prev_hash=TXHASH_f41cbe,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDWITNESS,
             multisig=multisig,
@@ -529,29 +437,18 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_f41cbe),
+                    request_input(0, TXHASH_f41cbe),
+                    request_output(0, TXHASH_f41cbe),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             signatures, _ = btc.sign_tx(
@@ -563,29 +460,18 @@ class TestMsgSigntxSegwitNative:
             inp1.address_n[2] = H_(1)
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ConfirmOutput),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_f41cbe),
+                    request_input(0, TXHASH_f41cbe),
+                    request_output(0, TXHASH_f41cbe),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -600,7 +486,9 @@ class TestMsgSigntxSegwitNative:
     @pytest.mark.multisig
     def test_send_multisig_3_change(self, client):
         nodes = [
-            btc.get_public_node(client, parse_path("84'/1'/%d'" % index))
+            btc.get_public_node(
+                client, parse_path(f"84'/1'/{index}'"), coin_name="Testnet"
+            )
             for index in range(1, 4)
         ]
         multisig = proto.MultisigRedeemScriptType(
@@ -618,9 +506,7 @@ class TestMsgSigntxSegwitNative:
 
         inp1 = proto.TxInputType(
             address_n=parse_path("84'/1'/1'/1/0"),
-            prev_hash=bytes.fromhex(
-                "c9348040bbc2024e12dcb4a0b4806b0398646b91acf314da028c3f03dd0179fc"
-            ),
+            prev_hash=TXHASH_c93480,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDWITNESS,
             multisig=multisig,
@@ -637,28 +523,17 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_c93480),
+                    request_input(0, TXHASH_c93480),
+                    request_output(0, TXHASH_c93480),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             signatures, _ = btc.sign_tx(
@@ -671,28 +546,17 @@ class TestMsgSigntxSegwitNative:
             out1.address_n[2] = H_(3)
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_c93480),
+                    request_input(0, TXHASH_c93480),
+                    request_output(0, TXHASH_c93480),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -707,7 +571,9 @@ class TestMsgSigntxSegwitNative:
     @pytest.mark.multisig
     def test_send_multisig_4_change(self, client):
         nodes = [
-            btc.get_public_node(client, parse_path("49'/1'/%d'" % index))
+            btc.get_public_node(
+                client, parse_path(f"49'/1'/{index}'"), coin_name="Testnet"
+            )
             for index in range(1, 4)
         ]
         multisig = proto.MultisigRedeemScriptType(
@@ -725,9 +591,7 @@ class TestMsgSigntxSegwitNative:
 
         inp1 = proto.TxInputType(
             address_n=parse_path("49'/1'/1'/1/1"),
-            prev_hash=bytes.fromhex(
-                "31bc1c88ce6ae337a6b3057a16d5bad0b561ad1dfc047d0a7fbb8814668f91e5"
-            ),
+            prev_hash=TXHASH_31bc1c,
             prev_index=0,
             script_type=proto.InputScriptType.SPENDP2SHWITNESS,
             multisig=multisig,
@@ -744,28 +608,17 @@ class TestMsgSigntxSegwitNative:
         with client:
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_31bc1c),
+                    request_input(0, TXHASH_31bc1c),
+                    request_output(0, TXHASH_31bc1c),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             signatures, _ = btc.sign_tx(
@@ -778,28 +631,17 @@ class TestMsgSigntxSegwitNative:
             out1.address_n[2] = H_(3)
             client.set_expected_responses(
                 [
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.ButtonRequest(code=proto.ButtonRequestType.SignTx),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXOUTPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(
-                        request_type=proto.RequestType.TXINPUT,
-                        details=proto.TxRequestDetailsType(request_index=0),
-                    ),
-                    proto.TxRequest(request_type=proto.RequestType.TXFINISHED),
+                    request_input(0),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_31bc1c),
+                    request_input(0, TXHASH_31bc1c),
+                    request_output(0, TXHASH_31bc1c),
+                    request_input(0),
+                    request_output(0),
+                    request_input(0),
+                    request_finished(),
                 ]
             )
             _, serialized_tx = btc.sign_tx(
@@ -809,4 +651,95 @@ class TestMsgSigntxSegwitNative:
         assert (
             serialized_tx.hex()
             == "01000000000101e5918f661488bb7f0a7d04fc1dad61b5d0bad5167a05b3a637e36ace881cbc310000000023220020fa6c73de618ec134eeec0c16f6dd04d46d4347e9a4fd0a95fd7938403a4949f9ffffffff01d071180000000000220020bcea2324dacbcde5a9db90cc26b8df9cbc72010e05cb68cf034df6f0e05239a2040047304402206bbddb45f12e31e77610fd85b50a83bad4426433b1c4860b1c5ddc0a69f803720220087b0607daab14830f4b4941f16b953b38e606ad70029bac24af7267f93c4242014730440220551a0cb6b0d5b3fa0cfd0b07bb5d751494b827b1c6a08702186696cfbc18278302204f37c382876c4117cca656654599b508f2d55fc3b083dc938e3cd8491b29719601695221036a5ec3abd10501409092246fe59c6d7a15fff1a933479483c3ba98b866c5b9742103559be875179d44e438db2c74de26e0bc9842cbdefd16018eae8a2ed989e474722103067b56aad037cd8b5f569b21f9025b76470a72dc69457813d2b76e98dc0cd01a53ae00000000"
+        )
+
+    # Ensure that if there is a non-multisig input, then a multisig output
+    # will not be identified as a change output.
+    def test_multisig_mismatch_inputs_single(self, client):
+        # m/84'/1'/0' for "alcohol woman abuse ..." seed.
+        node_int = deserialize(
+            "Vpub5kFDCYhiYuAzjk7TBQPNFffbexHF7iAd8AVVgHQKUany7e6NQvthgk86d7DfH57DY2dwBK4PyVTDDaS1r2gjkdyJyUYGoV9qNujGSrW9Dpe"
+        )
+
+        # m/84'/1'/0' for "all all ... all" seed.
+        node_ext = deserialize(
+            "Vpub5jR76XyyhBaQXPSRf3PBeY3gF914d9sf7DWFVhMESEQMCdNv35XiVvp8gZsFXAv222VPHLNnAEXxMPG8DPiSuhAXfEydBf55LTLBGHCDzH2"
+        )
+
+        # tb1qpzmgzpcumztvmpu3q27wwdggqav26j9dgks92pvnne2lz9ferxgssmhzlq
+        multisig_in = proto.MultisigRedeemScriptType(
+            nodes=[node_int, node_ext], address_n=[0, 0], signatures=[b"", b""], m=1
+        )
+
+        multisig_out = proto.MultisigRedeemScriptType(
+            nodes=[node_int, node_ext], address_n=[1, 0], signatures=[b"", b""], m=1
+        )
+
+        inp1 = proto.TxInputType(
+            address_n=parse_path("84'/1'/0'/0/0"),
+            amount=12300000,
+            prev_hash=TXHASH_091446,
+            prev_index=0,
+            script_type=proto.InputScriptType.SPENDWITNESS,
+        )
+
+        inp2 = proto.TxInputType(
+            address_n=parse_path("84'/1'/0'/0/0"),
+            prev_hash=TXHASH_a345b8,
+            prev_index=0,
+            script_type=proto.InputScriptType.SPENDWITNESS,
+            multisig=multisig_in,
+            amount=100,
+        )
+
+        out1 = proto.TxOutputType(
+            address="2N4Q5FhU2497BryFfUgbqkAJE87aKHUhXMp",
+            amount=5000000,
+            script_type=proto.OutputScriptType.PAYTOADDRESS,
+        )
+
+        out2 = proto.TxOutputType(
+            address_n=parse_path("84'/1'/0'/1/0"),
+            script_type=proto.OutputScriptType.PAYTOWITNESS,
+            multisig=multisig_out,
+            amount=12300000 + 100 - 5000000 - 10000,
+        )
+
+        with client:
+            client.set_expected_responses(
+                [
+                    request_input(0),
+                    request_input(1),
+                    request_output(0),
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    request_output(1),
+                    # Ensure that the multisig output is not identified as a change output.
+                    proto.ButtonRequest(code=B.ConfirmOutput),
+                    proto.ButtonRequest(code=B.SignTx),
+                    request_input(0),
+                    request_meta(TXHASH_091446),
+                    request_input(0, TXHASH_091446),
+                    request_output(0, TXHASH_091446),
+                    request_output(1, TXHASH_091446),
+                    request_input(1),
+                    request_meta(TXHASH_a345b8),
+                    request_input(0, TXHASH_a345b8),
+                    request_output(0, TXHASH_a345b8),
+                    request_input(0),
+                    request_input(1),
+                    request_output(0),
+                    request_output(1),
+                    request_input(0),
+                    request_input(1),
+                    request_finished(),
+                ]
+            )
+
+            _, serialized_tx = btc.sign_tx(
+                client, "Testnet", [inp1, inp2], [out1, out2], prev_txes=TX_API
+            )
+
+        assert (
+            serialized_tx.hex()
+            == "010000000001028a44999c07bba32df1cacdc50987944e68e3205b4429438fdde35c76024614090000000000ffffffff48e37c58a68ab4899400dc0950a661817ea7bac3e4556044c685b35957b845a30000000000ffffffff02404b4c000000000017a9147a55d61848e77ca266e79a39bfc85c580a6426c987f43c6f0000000000220020733ecfbbe7e47a74dde6c7645b60cdf627e90a585cde7733bc7fdaf9fe30b37402473044022037dc98b16be542a6e3e1ab32007a74192c43f2498170cc5e1dffb6847e3663e402206715102d0eb59e6461a97c78eb40a8679a04a8921fdafef25f0d3d16cc65de39012103adc58245cf28406af0ef5cc24b8afba7f1be6c72f279b642d85c48798685f8620300473044022070a24bcb00041cbed465f1f546bc59e1e353a6e182393932d5ba96e20bc32ef702202ddc76a97c01465692d5b0a0a61d653f64b9ea833af1810022110fd4d505ff950147512103505f0d82bbdd251511591b34f36ad5eea37d3220c2b81a1189084431ddb3aa3d2103adc58245cf28406af0ef5cc24b8afba7f1be6c72f279b642d85c48798685f86252ae00000000"
         )

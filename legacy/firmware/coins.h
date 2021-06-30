@@ -42,6 +42,8 @@ typedef struct _CoinInfo {
   uint32_t xpub_magic;
   uint32_t xpub_magic_segwit_p2sh;
   uint32_t xpub_magic_segwit_native;
+  uint32_t xpub_magic_multisig_segwit_p2sh;
+  uint32_t xpub_magic_multisig_segwit_native;
   uint32_t fork_id;
   const char *bech32_prefix;
   const char *cashaddr_prefix;
@@ -49,6 +51,9 @@ typedef struct _CoinInfo {
   bool negative_fee;
   const char *curve_name;
   const curve_info *curve;
+  bool extra_data;
+  bool timestamp;
+  bool overwintered;
 } CoinInfo;
 
 #include "coin_info.h"

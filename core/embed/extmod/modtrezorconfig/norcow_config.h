@@ -26,26 +26,19 @@
 #define NORCOW_SECTOR_COUNT 2
 
 #if TREZOR_MODEL == T
-
 #define NORCOW_SECTOR_SIZE (64 * 1024)
+#elif TREZOR_MODEL == 1
+#define NORCOW_SECTOR_SIZE (16 * 1024)
+#else
+#error Unknown Trezor model
+#endif
+
 #define NORCOW_SECTORS \
   { FLASH_SECTOR_STORAGE_1, FLASH_SECTOR_STORAGE_2 }
-
-#elif TREZOR_MODEL == 1
-
-#define NORCOW_SECTOR_SIZE (16 * 1024)
-#define NORCOW_SECTORS \
-  { 2, 3 }
-
-#else
-
-#error Unknown Trezor Model
-
-#endif
 
 /*
  * Current storage version.
  */
-#define NORCOW_VERSION ((uint32_t)0x00000002)
+#define NORCOW_VERSION ((uint32_t)0x00000003)
 
 #endif

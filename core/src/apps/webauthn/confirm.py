@@ -1,16 +1,12 @@
 from trezor import ui
-from trezor.ui.text import text_center_trim_left, text_center_trim_right
-
-if False:
-    from typing import Optional
-
+from trezor.ui.components.tt.text import text_center_trim_left, text_center_trim_right
 
 DEFAULT_ICON = "apps/webauthn/res/icon_webauthn.toif"
 
 
 class ConfirmInfo:
     def __init__(self) -> None:
-        self.app_icon = None  # type: Optional[bytes]
+        self.app_icon: bytes | None = None
 
     def get_header(self) -> str:
         raise NotImplementedError
@@ -18,12 +14,12 @@ class ConfirmInfo:
     def app_name(self) -> str:
         raise NotImplementedError
 
-    def account_name(self) -> Optional[str]:
+    def account_name(self) -> str | None:
         return None
 
     def load_icon(self, rp_id_hash: bytes) -> None:
         from trezor import res
-        from apps.webauthn import knownapps
+        from . import knownapps
 
         fido_app = knownapps.by_rp_id_hash(rp_id_hash)
         if fido_app is not None and fido_app.icon is not None:
@@ -34,8 +30,8 @@ class ConfirmInfo:
 
 class ConfirmContent(ui.Component):
     def __init__(self, info: ConfirmInfo) -> None:
+        super().__init__()
         self.info = info
-        self.repaint = True
 
     def on_render(self) -> None:
         if self.repaint:

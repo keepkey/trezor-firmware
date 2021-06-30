@@ -1,20 +1,17 @@
-from storage import is_initialized
-from trezor import config, ui, wire
-from trezor.messages.Success import Success
-from trezor.pin import pin_to_int
-from trezor.ui.text import Text
+from storage.device import is_initialized
+from trezor import config, wire
+from trezor.messages import Success
+from trezor.ui.layouts import confirm_action, show_success
 
-from apps.common.confirm import require_confirm
-from apps.common.layout import show_success
 from apps.common.request_pin import (
+    error_pin_invalid,
+    error_pin_matches_wipe_code,
     request_pin_and_sd_salt,
     request_pin_confirm,
-    show_pin_invalid,
-    show_pin_matches_wipe_code,
 )
 
 if False:
-    from trezor.messages.ChangePin import ChangePin
+    from trezor.messages import ChangePin
 
 
 async def change_pin(ctx: wire.Context, msg: ChangePin) -> Success:
@@ -29,9 +26,8 @@ async def change_pin(ctx: wire.Context, msg: ChangePin) -> Success:
 
     # if changing pin, pre-check the entered pin before getting new pin
     if curpin and not msg.remove:
-        if not config.check_pin(pin_to_int(curpin), salt):
-            await show_pin_invalid(ctx)
-            raise wire.PinInvalid("PIN invalid")
+        if not config.check_pin(curpin, salt):
+            await error_pin_invalid(ctx)
 
     # get new pin
     if not msg.remove:
@@ -40,25 +36,24 @@ async def change_pin(ctx: wire.Context, msg: ChangePin) -> Success:
         newpin = ""
 
     # write into storage
-    if not config.change_pin(pin_to_int(curpin), pin_to_int(newpin), salt, salt):
+    if not config.change_pin(curpin, newpin, salt, salt):
         if newpin:
-            await show_pin_matches_wipe_code(ctx)
+            await error_pin_matches_wipe_code(ctx)
         else:
-            await show_pin_invalid(ctx)
-        raise wire.PinInvalid("PIN invalid")
+            await error_pin_invalid(ctx)
 
     if newpin:
         if curpin:
-            msg_screen = "changed your PIN."
+            msg_screen = "You have successfully changed your PIN."
             msg_wire = "PIN changed"
         else:
-            msg_screen = "enabled PIN protection."
+            msg_screen = "You have successfully enabled PIN protection."
             msg_wire = "PIN enabled"
     else:
-        msg_screen = "disabled PIN protection."
+        msg_screen = "You have successfully disabled PIN protection."
         msg_wire = "PIN removed"
 
-    await show_success(ctx, ("You have successfully", msg_screen))
+    await show_success(ctx, "success_pin", msg_screen)
     return Success(message=msg_wire)
 
 
@@ -66,22 +61,34 @@ def require_confirm_change_pin(ctx: wire.Context, msg: ChangePin) -> None:
     has_pin = config.has_pin()
 
     if msg.remove and has_pin:  # removing pin
-        text = Text("Remove PIN", ui.ICON_CONFIG)
-        text.normal("Do you really want to")
-        text.bold("disable PIN protection?")
-        return require_confirm(ctx, text)
+        return confirm_action(
+            ctx,
+            "set_pin",
+            "Remove PIN",
+            description="Do you really want to",
+            action="disable PIN protection?",
+            reverse=True,
+        )
 
     if not msg.remove and has_pin:  # changing pin
-        text = Text("Change PIN", ui.ICON_CONFIG)
-        text.normal("Do you really want to")
-        text.bold("change your PIN?")
-        return require_confirm(ctx, text)
+        return confirm_action(
+            ctx,
+            "set_pin",
+            "Change PIN",
+            description="Do you really want to",
+            action="change your PIN?",
+            reverse=True,
+        )
 
     if not msg.remove and not has_pin:  # setting new pin
-        text = Text("Enable PIN", ui.ICON_CONFIG)
-        text.normal("Do you really want to")
-        text.bold("enable PIN protection?")
-        return require_confirm(ctx, text)
+        return confirm_action(
+            ctx,
+            "set_pin",
+            "Enable PIN",
+            description="Do you really want to",
+            action="enable PIN protection?",
+            reverse=True,
+        )
 
     # removing non-existing PIN
     raise wire.ProcessError("PIN protection already disabled")

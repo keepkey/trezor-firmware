@@ -1,63 +1,106 @@
-import storage
-import storage.cache
+from storage import cache, device
 from trezor import wire
 from trezor.crypto import bip32
 
-from apps.cardano import CURVE, SEED_NAMESPACE
 from apps.common import mnemonic
-from apps.common.request_passphrase import protect_by_passphrase
+from apps.common.passphrase import get as get_passphrase
+from apps.common.seed import get_seed
+
+from .helpers import paths
+
+if False:
+    from typing import Callable, Awaitable
+
+    from apps.common.paths import Bip32Path
+    from apps.common.keychain import MsgIn, MsgOut, Handler
+
+    HandlerWithKeychain = Callable[[wire.Context, MsgIn, "Keychain"], Awaitable[MsgOut]]
 
 
 class Keychain:
-    def __init__(self, path: list, root: bip32.HDNode):
-        self.path = path
-        self.root = root
+    """Cardano keychain hard-coded to Byron and Shelley seed namespaces."""
 
-    def validate_path(self, checked_path: list, checked_curve: str):
-        if checked_curve != CURVE or checked_path[:2] != SEED_NAMESPACE:
+    def __init__(self, root: bip32.HDNode) -> None:
+        self.byron_root = derive_path_cardano(root, paths.BYRON_ROOT)
+        self.shelley_root = derive_path_cardano(root, paths.SHELLEY_ROOT)
+        root.__del__()
+
+    def verify_path(self, path: Bip32Path) -> None:
+        if not is_byron_path(path) and not is_shelley_path(path):
             raise wire.DataError("Forbidden key path")
 
-    def derive(self, node_path: list) -> bip32.HDNode:
-        # check we are in the cardano namespace
-        prefix = node_path[: len(self.path)]
-        suffix = node_path[len(self.path) :]
-        if prefix != self.path:
+    def _get_path_root(self, path: Bip32Path) -> bip32.HDNode:
+        if is_byron_path(path):
+            return self.byron_root
+        elif is_shelley_path(path):
+            return self.shelley_root
+        else:
             raise wire.DataError("Forbidden key path")
+
+    def is_in_keychain(self, path: Bip32Path) -> bool:
+        return is_byron_path(path) or is_shelley_path(path)
+
+    def derive(self, node_path: Bip32Path) -> bip32.HDNode:
+        self.verify_path(node_path)
+        path_root = self._get_path_root(node_path)
+
+        # this is true now, so for simplicity we don't branch on path type
+        assert len(paths.BYRON_ROOT) == len(paths.SHELLEY_ROOT)
+        suffix = node_path[len(paths.SHELLEY_ROOT) :]
+
         # derive child node from the root
-        node = self.root.clone()
-        for i in suffix:
-            node.derive_cardano(i)
-        return node
+        return derive_path_cardano(path_root, suffix)
+
+    # XXX the root node remains in session cache so we should not delete it
+    # def __del__(self) -> None:
+    #     self.root.__del__()
 
 
+def is_byron_path(path: Bip32Path) -> bool:
+    return path[: len(paths.BYRON_ROOT)] == paths.BYRON_ROOT
+
+
+def is_shelley_path(path: Bip32Path) -> bool:
+    return path[: len(paths.SHELLEY_ROOT)] == paths.SHELLEY_ROOT
+
+
+def derive_path_cardano(root: bip32.HDNode, path: Bip32Path) -> bip32.HDNode:
+    node = root.clone()
+    for i in path:
+        node.derive_cardano(i)
+    return node
+
+
+@cache.stored_async(cache.APP_CARDANO_PASSPHRASE)
 async def _get_passphrase(ctx: wire.Context) -> bytes:
-    passphrase = storage.cache.get_passphrase()
-    if passphrase is None:
-        passphrase = await protect_by_passphrase(ctx)
-        storage.cache.set_passphrase(passphrase)
+    return (await get_passphrase(ctx)).encode()
 
-    return passphrase
+
+async def _get_keychain_bip39(ctx: wire.Context) -> Keychain:
+    if not device.is_initialized():
+        raise wire.NotInitialized("Device is not initialized")
+
+    # ask for passphrase, loading from cache if necessary
+    passphrase = await _get_passphrase(ctx)
+    # derive the root node from mnemonic and passphrase via Cardano Icarus algorithm
+    secret_bytes = mnemonic.get_secret()
+    assert secret_bytes is not None
+    root = bip32.from_mnemonic_cardano(secret_bytes.decode(), passphrase.decode())
+    return Keychain(root)
 
 
 async def get_keychain(ctx: wire.Context) -> Keychain:
-    if not storage.is_initialized():
-        raise wire.NotInitialized("Device is not initialized")
-
     if mnemonic.is_bip39():
-        # derive the root node from mnemonic and passphrase
-        passphrase = await _get_passphrase(ctx)
-        root = bip32.from_mnemonic_cardano(mnemonic.get_secret().decode(), passphrase)
+        return await _get_keychain_bip39(ctx)
     else:
-        seed = storage.cache.get_seed()
-        if seed is None:
-            passphrase = await _get_passphrase(ctx)
-            seed = mnemonic.get_seed(passphrase)
-            storage.cache.set_seed(seed)
-        root = bip32.from_seed(seed, "ed25519 cardano seed")
+        # derive the root node via SLIP-0023 https://github.com/satoshilabs/slips/blob/master/slip-0022.md
+        seed = await get_seed(ctx)
+        return Keychain(bip32.from_seed(seed, "ed25519 cardano seed"))
 
-    # derive the namespaced root node
-    for i in SEED_NAMESPACE:
-        root.derive_cardano(i)
 
-    keychain = Keychain(SEED_NAMESPACE, root)
-    return keychain
+def with_keychain(func: HandlerWithKeychain[MsgIn, MsgOut]) -> Handler[MsgIn, MsgOut]:
+    async def wrapper(ctx: wire.Context, msg: MsgIn) -> MsgOut:
+        keychain = await get_keychain(ctx)
+        return await func(ctx, msg, keychain)
+
+    return wrapper

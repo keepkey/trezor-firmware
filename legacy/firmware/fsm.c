@@ -61,9 +61,13 @@
 #include "stellar.h"
 #endif
 
+#if EMULATOR
+#include <stdio.h>
+#endif
+
 // message methods
 
-static uint8_t msg_resp[MSG_OUT_SIZE] __attribute__((aligned));
+static uint8_t msg_resp[MSG_OUT_DECODED_SIZE] __attribute__((aligned));
 
 #define RESP_INIT(TYPE)                                                    \
   TYPE *resp = (TYPE *)(void *)msg_resp;                                   \
@@ -170,6 +174,9 @@ void fsm_sendFailure(FailureType code, const char *text)
       case FailureType_Failure_WipeCodeMismatch:
         text = _("Wipe code mismatch");
         break;
+      case FailureType_Failure_InvalidSession:
+        text = _("Invalid session");
+        break;
       case FailureType_Failure_FirmwareError:
         text = _("Firmware error");
         break;
@@ -212,10 +219,7 @@ static HDNode *fsm_getDerivedNode(const char *curve, const uint32_t *address_n,
   if (fingerprint) {
     *fingerprint = 0;
   }
-  if (!config_getRootNode(&node, curve, true)) {
-    fsm_sendFailure(FailureType_Failure_NotInitialized,
-                    _("Device not initialized or passphrase request cancelled "
-                      "or unsupported curve"));
+  if (!config_getRootNode(&node, curve)) {
     layoutHome();
     return 0;
   }
@@ -235,15 +239,60 @@ static HDNode *fsm_getDerivedNode(const char *curve, const uint32_t *address_n,
 static bool fsm_layoutAddress(const char *address, const char *desc,
                               bool ignorecase, size_t prefixlen,
                               const uint32_t *address_n, size_t address_n_count,
-                              bool address_is_account) {
-  bool qrcode = false;
+                              bool address_is_account,
+                              const MultisigRedeemScriptType *multisig,
+                              int multisig_index, uint32_t multisig_xpub_magic,
+                              const CoinInfo *coin) {
+  int screen = 0, screens = 2;
+  if (multisig) {
+    screens += 2 * cryptoMultisigPubkeyCount(multisig);
+  }
   for (;;) {
-    const char *display_addr = address;
-    if (prefixlen && !qrcode) {
-      display_addr += prefixlen;
+    switch (screen) {
+      case 0: {  // show address
+        const char *display_addr = address;
+        // strip cashaddr prefix
+        if (prefixlen) {
+          display_addr += prefixlen;
+        }
+        layoutAddress(display_addr, desc, false, ignorecase, address_n,
+                      address_n_count, address_is_account);
+        break;
+      }
+      case 1: {  // show QR code
+        layoutAddress(address, desc, true, ignorecase, address_n,
+                      address_n_count, address_is_account);
+        break;
+      }
+      default: {  // show XPUBs
+        int index = (screen - 2) / 2;
+        int page = (screen - 2) % 2;
+        char xpub[XPUB_MAXLEN] = {0};
+        const HDNodeType *node_ptr = NULL;
+        if (multisig->nodes_count) {  // use multisig->nodes
+          node_ptr = &(multisig->nodes[index]);
+        } else if (multisig->pubkeys_count) {  // use multisig->pubkeys
+          node_ptr = &(multisig->pubkeys[index].node);
+        }
+
+        if (!node_ptr) {
+          strlcat(xpub, "ERROR", sizeof(xpub));
+        } else {
+          HDNode node;
+          if (!hdnode_from_xpub(node_ptr->depth, node_ptr->child_num,
+                                node_ptr->chain_code.bytes,
+                                node_ptr->public_key.bytes, coin->curve_name,
+                                &node)) {
+            strlcat(xpub, "ERROR", sizeof(xpub));
+          } else {
+            hdnode_serialize_public(&node, node_ptr->fingerprint,
+                                    multisig_xpub_magic, xpub, sizeof(xpub));
+          }
+        }
+        layoutXPUBMultisig(xpub, index, page, multisig_index == index);
+        break;
+      }
     }
-    layoutAddress(display_addr, desc, qrcode, ignorecase, address_n,
-                  address_n_count, address_is_account);
     if (protectButton(ButtonRequestType_ButtonRequest_Address, false)) {
       return true;
     }
@@ -252,8 +301,30 @@ static bool fsm_layoutAddress(const char *address, const char *desc,
       layoutHome();
       return false;
     }
-    qrcode = !qrcode;
+    screen = (screen + 1) % screens;
   }
+}
+
+void fsm_msgRebootToBootloader(void) {
+  layoutDialogSwipe(&bmp_icon_question, _("Cancel"), _("Confirm"), NULL,
+                    _("Do you want to"), _("restart device in"),
+                    _("bootloader mode?"), NULL, NULL, NULL);
+  if (!protectButton(ButtonRequestType_ButtonRequest_ProtectCall, false)) {
+    fsm_sendFailure(FailureType_Failure_ActionCancelled, NULL);
+    layoutHome();
+    return;
+  }
+  oledClear();
+  oledRefresh();
+  fsm_sendSuccess(_("Rebooting"));
+  // make sure the outgoing message is sent
+  usbPoll();
+  usbSleep(500);
+#if !EMULATOR
+  svc_reboot_to_bootloader();
+#else
+  printf("Reboot!\n");
+#endif
 }
 
 #include "fsm_msg_coin.h"

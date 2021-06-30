@@ -9,7 +9,6 @@ See `schedule`, `run`, and syscalls `sleep`, `wait`, `signal` and `race`.
 
 import utime
 import utimeq
-from micropython import const
 
 from trezor import io, log
 
@@ -19,52 +18,58 @@ if False:
         Awaitable,
         Callable,
         Coroutine,
-        Dict,
         Generator,
-        List,
-        Optional,
-        Set,
-        Tuple,
     )
 
     Task = Coroutine
     Finalizer = Callable[[Task, Any], None]
 
 # function to call after every task step
-after_step_hook = None  # type: Optional[Callable[[], None]]
+after_step_hook: Callable[[], None] | None = None
 
 # tasks scheduled for execution in the future
 _queue = utimeq.utimeq(64)
 
 # tasks paused on I/O
-_paused = {}  # type: Dict[int, Set[Task]]
+_paused: dict[int, set[Task]] = {}
 
 # functions to execute after a task is finished
-_finalizers = {}  # type: Dict[int, Finalizer]
+_finalizers: dict[int, Finalizer] = {}
+
+# reference to the task that is currently executing
+this_task: Task | None = None
 
 if __debug__:
-    # for performance stats
-    import array
-
-    log_delay_pos = 0
-    log_delay_rb_len = const(10)
-    log_delay_rb = array.array("i", [0] * log_delay_rb_len)
-
     # synthetic event queue
-    synthetic_events = []  # type: List[Tuple[int, Any]]
+    synthetic_events: list[tuple[int, Any]] = []
+
+
+class TaskClosed(Exception):
+    pass
+
+
+TASK_CLOSED = TaskClosed()
 
 
 def schedule(
-    task: Task, value: Any = None, deadline: int = None, finalizer: Finalizer = None
+    task: Task,
+    value: Any = None,
+    deadline: int | None = None,
+    finalizer: Finalizer | None = None,
+    reschedule: bool = False,
 ) -> None:
     """
     Schedule task to be executed with `value` on given `deadline` (in
     microseconds).  Does not start the event loop itself, see `run`.
     Usually done in very low-level cases, see `race` for more user-friendly
     and correct concept.
+
+    If `reschedule` is set, updates an existing entry.
     """
+    if reschedule:
+        _queue.discard(task)
     if deadline is None:
-        deadline = utime.ticks_us()
+        deadline = utime.ticks_ms()
     if finalizer is not None:
         _finalizers[id(task)] = finalizer
     _queue.push(deadline, task, value)
@@ -108,26 +113,10 @@ def run() -> None:
     Tasks yield back to the scheduler on any I/O, usually by calling `await` on
     a `Syscall`.
     """
-
-    if __debug__:
-        global log_delay_pos
-
-    max_delay = const(1000000)  # usec delay if queue is empty
-
     task_entry = [0, 0, 0]  # deadline, task, value
     msg_entry = [0, 0]  # iface | flags, value
     while _queue or _paused:
-        # compute the maximum amount of time we can wait for a message
-        if _queue:
-            delay = utime.ticks_diff(_queue.peektime(), utime.ticks_us())
-        else:
-            delay = max_delay
-
         if __debug__:
-            # add current delay to ring buffer for performance stats
-            log_delay_rb[log_delay_pos] = delay
-            log_delay_pos = (log_delay_pos + 1) % log_delay_rb_len
-
             # process synthetic events
             if synthetic_events:
                 iface, event = synthetic_events[0]
@@ -136,6 +125,16 @@ def run() -> None:
                     synthetic_events.pop(0)
                     for task in msg_tasks:
                         _step(task, event)
+
+                    # XXX: we assume that synthetic events are rare. If there is a lot of them,
+                    # this degrades to "while synthetic_events" and would ignore all real ones.
+                    continue
+
+        # compute the maximum amount of time we can wait for a message
+        if _queue:
+            delay = utime.ticks_diff(_queue.peektime(), utime.ticks_ms())
+        else:
+            delay = 1000  # wait for 1 sec maximum if queue is empty
 
         if io.poll(_paused, msg_entry, delay):
             # message received, run tasks paused on the interface
@@ -176,11 +175,11 @@ def _step(task: Task, value: Any) -> None:
         c) Something else
             - This should not happen - error.
     """
+    global this_task
+    this_task = task
     try:
         if isinstance(value, BaseException):
-            result = task.throw(value)  # type: ignore
-            # error: Argument 1 to "throw" of "Coroutine" has incompatible type "Exception"; expected "Type[BaseException]"
-            # rationale: In micropython, generator.throw() accepts the exception object directly.
+            result = task.throw(value)
         else:
             result = task.send(value)
     except StopIteration as e:
@@ -220,23 +219,26 @@ class Syscall:
         pass
 
 
+SLEEP_FOREVER = Syscall()
+"""Tasks awaiting `SLEEP_FOREVER` will never be resumed."""
+
+
 class sleep(Syscall):
-    """
-    Pause current task and resume it after given delay.  Although the delay is
-    given in microseconds, sub-millisecond precision is not guaranteed.  Result
-    value is the calculated deadline.
+    """Pause current task and resume it after given delay.
+
+    Result value is the calculated deadline.
 
     Example:
 
-    >>> planned = await loop.sleep(1000 * 1000)  # sleep for 1ms
-    >>> print('missed by %d us', utime.ticks_diff(utime.ticks_us(), planned))
+    >>> planned = await loop.sleep(1000)  # sleep for 1s
+    >>> print('missed by %d ms', utime.ticks_diff(utime.ticks_ms(), planned))
     """
 
-    def __init__(self, delay_us: int) -> None:
-        self.delay_us = delay_us
+    def __init__(self, delay_ms: int) -> None:
+        self.delay_ms = delay_ms
 
     def handle(self, task: Task) -> None:
-        deadline = utime.ticks_add(utime.ticks_us(), self.delay_us)
+        deadline = utime.ticks_add(utime.ticks_ms(), self.delay_ms)
         schedule(task, deadline, deadline)
 
 
@@ -291,8 +293,8 @@ class race(Syscall):
     def __init__(self, *children: Awaitable, exit_others: bool = True) -> None:
         self.children = children
         self.exit_others = exit_others
-        self.finished = []  # type: List[Awaitable]  # children that finished
-        self.scheduled = []  # type: List[Task]  # scheduled wrapper tasks
+        self.finished: list[Awaitable] = []  # children that finished
+        self.scheduled: list[Task] = []  # scheduled wrapper tasks
 
     def handle(self, task: Task) -> None:
         """
@@ -311,11 +313,11 @@ class race(Syscall):
                 child_task = child
             else:
                 child_task = iter(child)  # type: ignore
-            schedule(child_task, None, None, finalizer)  # type: ignore
-            scheduled.append(child_task)  # type: ignore
+            schedule(child_task, None, None, finalizer)
+            scheduled.append(child_task)
             # TODO: document the types here
 
-    def exit(self, except_for: Task = None) -> None:
+    def exit(self, except_for: Task | None = None) -> None:
         for task in self.scheduled:
             if task != except_for:
                 close(task)
@@ -339,6 +341,8 @@ class race(Syscall):
         except:  # noqa: E722
             # exception was raised on the waiting task externally with
             # close() or throw(), kill the children tasks and re-raise
+            # Make sure finalizers don't continue processing.
+            self.finished.append(self)
             self.exit()
             raise
 
@@ -376,7 +380,7 @@ class chan:
         def __init__(self, ch: "chan", value: Any) -> None:
             self.ch = ch
             self.value = value
-            self.task = None  # type: Optional[Task]
+            self.task: Task | None = None
 
         def handle(self, task: Task) -> None:
             self.task = task
@@ -385,15 +389,15 @@ class chan:
     class Take(Syscall):
         def __init__(self, ch: "chan") -> None:
             self.ch = ch
-            self.task = None  # type: Optional[Task]
+            self.task: Task | None = None
 
         def handle(self, task: Task) -> None:
             self.task = task
             self.ch._schedule_take(task)
 
     def __init__(self) -> None:
-        self.putters = []  # type: List[Tuple[Optional[Task], Any]]
-        self.takers = []  # type: List[Task]
+        self.putters: list[tuple[Task | None, Any]] = []
+        self.takers: list[Task] = []
 
     def put(self, value: Any) -> Awaitable[None]:  # type: ignore
         put = chan.Put(self, value)
@@ -439,3 +443,118 @@ class chan:
                 schedule(putter)
         else:
             self.takers.append(taker)
+
+
+class spawn(Syscall):
+    """Spawn a task asynchronously and get an awaitable reference to it.
+
+    Abstraction over `loop.schedule` and `loop.close`. Useful when you need to start
+    a task in the background, but want to be able to kill it from the outside.
+
+    Examples:
+
+    1. Spawn a background task, get its result later.
+
+    >>> wire_read = loop.spawn(read_from_wire())
+    >>> long_result = await long_running_operation()
+    >>> wire_result = await wire_read
+
+    2. Allow the user to kill a long-running operation:
+
+    >>> try:
+    >>>     operation = loop.spawn(long_running_operation())
+    >>>     result = await operation
+    >>>     print("finished with result", result)
+    >>> except loop.TaskClosed:
+    >>>     print("task was closed before it could finish")
+    >>>
+    >>> # meanwhile, on the other side of town...
+    >>> controller.close()
+
+    Task is spawned only once. Multiple attempts to `await spawned_object` will return
+    the original return value (or raise the original exception).
+    """
+
+    def __init__(self, task: Task) -> None:
+        self.task = task
+        self.callback: Task | None = None
+        self.finalizer_callback: Callable[["spawn"], None] | None = None
+        self.finished = False
+        self.return_value: Any = None
+
+        # schedule task immediately
+        if __debug__:
+            log.debug(__name__, "spawn new task: %s", task)
+        schedule(task, finalizer=self._finalize)
+
+    def _finalize(self, task: Task, value: Any) -> None:
+        # sanity check: make sure finalizer is for our task
+        assert task is self.task
+        # sanity check: make sure finalizer is not called more than once
+        assert self.finished is False
+
+        # now we are truly finished
+        self.finished = True
+        if isinstance(value, GeneratorExit):
+            # coerce GeneratorExit to a catchable TaskClosed
+            self.return_value = TASK_CLOSED
+        else:
+            self.return_value = value
+
+        if self.callback is not None:
+            schedule(self.callback, self.return_value)
+            self.callback = None
+        if self.finalizer_callback is not None:
+            self.finalizer_callback(self)
+
+    def __iter__(self) -> Task:  # type: ignore
+        if self.finished:
+            # exit immediately if we already have a return value
+            if isinstance(self.return_value, BaseException):
+                raise self.return_value
+            else:
+                return self.return_value
+
+        try:
+            return (yield self)
+        except BaseException:
+            # Clear out the callback. Otherwise we would raise the exception into it,
+            # AND schedule it with the closing value of the child task.
+            self.callback = None
+            assert self.task is not this_task  # closing parent from child :(
+            close(self.task)
+            raise
+
+    def handle(self, caller: Task) -> None:
+        # the same spawn should not be awaited multiple times
+        assert self.callback is None
+        self.callback = caller
+
+    def close(self) -> None:
+        """Shut down the spawned task.
+
+        If another caller is awaiting its result it will get a TaskClosed exception.
+        If the task was already finished, the call has no effect.
+        """
+        if not self.finished:
+            if __debug__:
+                log.debug(__name__, "close spawned task: %s", self.task)
+            close(self.task)
+
+    def set_finalizer(self, finalizer_callback: Callable[["spawn"], None]) -> None:
+        """Register a finalizer callback.
+
+        The provided function is executed synchronously when the spawned task ends,
+        with the spawn object as an argument.
+        """
+        if self.finished:
+            finalizer_callback(self)
+        self.finalizer_callback = finalizer_callback
+
+    def is_running(self) -> bool:
+        """Check if the caller is executing from the spawned task.
+
+        Useful for checking if it is OK to call `task.close()`. If `task.is_running()`
+        is True, it would be calling close on self, which will result in a ValueError.
+        """
+        return self.task is this_task

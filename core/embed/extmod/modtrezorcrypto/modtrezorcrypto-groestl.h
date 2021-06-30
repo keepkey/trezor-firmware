@@ -41,7 +41,7 @@ typedef struct _mp_obj_Groestl512_t {
 STATIC mp_obj_t mod_trezorcrypto_Groestl512_update(mp_obj_t self,
                                                    mp_obj_t data);
 
-/// def __init__(self, data: bytes = None) -> None:
+/// def __init__(self, data: bytes | None = None) -> None:
 ///     """
 ///     Creates a hash context object.
 ///     """
@@ -49,7 +49,7 @@ STATIC mp_obj_t mod_trezorcrypto_Groestl512_make_new(const mp_obj_type_t *type,
                                                      size_t n_args, size_t n_kw,
                                                      const mp_obj_t *args) {
   mp_arg_check_num(n_args, n_kw, 0, 1, false);
-  mp_obj_Groestl512_t *o = m_new_obj(mp_obj_Groestl512_t);
+  mp_obj_Groestl512_t *o = m_new_obj_with_finaliser(mp_obj_Groestl512_t);
   o->base.type = type;
   groestl512_Init(&(o->ctx));
   if (n_args == 1) {
@@ -65,7 +65,7 @@ STATIC mp_obj_t mod_trezorcrypto_Groestl512_make_new(const mp_obj_type_t *type,
 STATIC mp_obj_t mod_trezorcrypto_Groestl512_update(mp_obj_t self,
                                                    mp_obj_t data) {
   mp_obj_Groestl512_t *o = MP_OBJ_TO_PTR(self);
-  mp_buffer_info_t msg;
+  mp_buffer_info_t msg = {0};
   mp_get_buffer_raise(data, &msg, MP_BUFFER_READ);
   if (msg.len > 0) {
     groestl512_Update(&(o->ctx), msg.buf, msg.len);
@@ -81,12 +81,13 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_trezorcrypto_Groestl512_update_obj,
 ///     """
 STATIC mp_obj_t mod_trezorcrypto_Groestl512_digest(mp_obj_t self) {
   mp_obj_Groestl512_t *o = MP_OBJ_TO_PTR(self);
-  uint8_t out[GROESTL512_DIGEST_LENGTH];
-  GROESTL512_CTX ctx;
+  vstr_t hash = {0};
+  vstr_init_len(&hash, GROESTL512_DIGEST_LENGTH);
+  GROESTL512_CTX ctx = {0};
   memcpy(&ctx, &(o->ctx), sizeof(GROESTL512_CTX));
-  groestl512_Final(&ctx, out);
+  groestl512_Final(&ctx, (uint8_t *)hash.buf);
   memzero(&ctx, sizeof(GROESTL512_CTX));
-  return mp_obj_new_bytes(out, sizeof(out));
+  return mp_obj_new_str_from_vstr(&mp_type_bytes, &hash);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorcrypto_Groestl512_digest_obj,
                                  mod_trezorcrypto_Groestl512_digest);

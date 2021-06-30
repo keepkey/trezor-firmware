@@ -1,34 +1,33 @@
-from trezor import config, loop, ui, wire
-from trezor.messages import ButtonRequestType
-from trezor.messages.ButtonAck import ButtonAck
-from trezor.messages.ButtonRequest import ButtonRequest
-from trezor.pin import pin_to_int
-from trezor.ui.pin import CANCELLED, PinDialog
-from trezor.ui.popup import Popup
-from trezor.ui.text import Text
+import utime
 
-from apps.common.sd_salt import SdProtectCancelled, request_sd_salt
+import storage.cache
+import storage.sd_salt
+from trezor import config, ui, wire
+from trezor.enums import ButtonRequestType
+from trezor.ui.popup import Popup
+
+from . import button_request
+from .sdcard import SdCardUnavailable, request_sd_salt
 
 if False:
-    from typing import Any, Optional, Tuple
-
-if __debug__:
-    from apps.debug import input_signal
+    from typing import Any, NoReturn
 
 
-class PinCancelled(Exception):
-    pass
-
-
-class PinInvalid(Exception):
-    pass
+def can_lock_device() -> bool:
+    """Return True if the device has a PIN set or SD-protect enabled."""
+    return config.has_pin() or storage.sd_salt.is_enabled()
 
 
 async def request_pin(
+    ctx: wire.GenericContext,
     prompt: str = "Enter your PIN",
-    attempts_remaining: int = None,
+    attempts_remaining: int | None = None,
     allow_cancel: bool = True,
 ) -> str:
+    from trezor.ui.components.tt.pin import CANCELLED, PinDialog
+
+    await button_request(ctx, code=ButtonRequestType.PinEntry)
+
     if attempts_remaining is None:
         subprompt = None
     elif attempts_remaining == 1:
@@ -39,36 +38,25 @@ async def request_pin(
     dialog = PinDialog(prompt, subprompt, allow_cancel)
 
     while True:
-        if __debug__:
-            pin = await loop.race(dialog, input_signal())
-        else:
-            pin = await dialog
+        pin = await ctx.wait(dialog)
         if pin is CANCELLED:
-            raise PinCancelled
+            raise wire.PinCancelled
         assert isinstance(pin, str)
         return pin
-
-
-async def request_pin_ack(ctx: wire.Context, *args: Any, **kwargs: Any) -> str:
-    try:
-        await ctx.call(ButtonRequest(code=ButtonRequestType.Other), ButtonAck)
-        pin = await ctx.wait(request_pin(*args, **kwargs))
-        assert isinstance(pin, str)
-        return pin
-    except PinCancelled:
-        raise wire.ActionCancelled("Cancelled")
 
 
 async def request_pin_confirm(ctx: wire.Context, *args: Any, **kwargs: Any) -> str:
     while True:
-        pin1 = await request_pin_ack(ctx, "Enter new PIN", *args, **kwargs)
-        pin2 = await request_pin_ack(ctx, "Re-enter new PIN", *args, **kwargs)
+        pin1 = await request_pin(ctx, "Enter new PIN", *args, **kwargs)
+        pin2 = await request_pin(ctx, "Re-enter new PIN", *args, **kwargs)
         if pin1 == pin2:
             return pin1
         await pin_mismatch()
 
 
 async def pin_mismatch() -> None:
+    from trezor.ui.components.tt.text import Text
+
     text = Text("PIN mismatch", ui.ICON_WRONG, ui.RED)
     text.normal("The PINs you entered", "do not match.")
     text.normal("")
@@ -79,49 +67,97 @@ async def pin_mismatch() -> None:
 
 async def request_pin_and_sd_salt(
     ctx: wire.Context, prompt: str = "Enter your PIN", allow_cancel: bool = True
-) -> Tuple[str, Optional[bytearray]]:
-    salt = await request_sd_salt(ctx)
-
+) -> tuple[str, bytearray | None]:
     if config.has_pin():
-        pin = await request_pin_ack(ctx, prompt, config.get_pin_rem(), allow_cancel)
+        pin = await request_pin(ctx, prompt, config.get_pin_rem(), allow_cancel)
+        config.ensure_not_wipe_code(pin)
     else:
         pin = ""
+
+    salt = await request_sd_salt(ctx)
 
     return pin, salt
 
 
-async def verify_user_pin(
-    prompt: str = "Enter your PIN", allow_cancel: bool = True, retry: bool = True
-) -> None:
-    try:
-        salt = await request_sd_salt()
-    except SdProtectCancelled:
-        raise PinCancelled
+def _set_last_unlock_time() -> None:
+    now = utime.ticks_ms()
+    storage.cache.set(
+        storage.cache.APP_COMMON_REQUEST_PIN_LAST_UNLOCK, now.to_bytes(4, "big")
+    )
 
-    if not config.has_pin() and not config.check_pin(pin_to_int(""), salt):
+
+def _get_last_unlock_time() -> int:
+    return int.from_bytes(
+        storage.cache.get(storage.cache.APP_COMMON_REQUEST_PIN_LAST_UNLOCK, b""), "big"
+    )
+
+
+async def verify_user_pin(
+    ctx: wire.GenericContext = wire.DUMMY_CONTEXT,
+    prompt: str = "Enter your PIN",
+    allow_cancel: bool = True,
+    retry: bool = True,
+    cache_time_ms: int = 0,
+) -> None:
+    last_unlock = _get_last_unlock_time()
+    if (
+        cache_time_ms
+        and last_unlock
+        and utime.ticks_ms() - last_unlock <= cache_time_ms
+        and config.is_unlocked()
+    ):
+        return
+
+    if config.has_pin():
+        pin = await request_pin(ctx, prompt, config.get_pin_rem(), allow_cancel)
+        config.ensure_not_wipe_code(pin)
+    else:
+        pin = ""
+
+    try:
+        salt = await request_sd_salt(ctx)
+    except SdCardUnavailable:
+        raise wire.PinCancelled("SD salt is unavailable")
+    if config.unlock(pin, salt):
+        _set_last_unlock_time()
+        return
+    elif not config.has_pin():
         raise RuntimeError
 
     while retry:
-        pin = await request_pin(prompt, config.get_pin_rem(), allow_cancel)
-        if config.check_pin(pin_to_int(pin), salt):
+        pin = await request_pin(
+            ctx, "Wrong PIN, enter again", config.get_pin_rem(), allow_cancel
+        )
+        if config.unlock(pin, salt):
+            _set_last_unlock_time()
             return
-        else:
-            prompt = "Wrong PIN, enter again"
 
-    raise PinInvalid
+    raise wire.PinInvalid
 
 
-async def show_pin_invalid(ctx: wire.Context) -> None:
-    from apps.common.confirm import confirm
+async def error_pin_invalid(ctx: wire.Context) -> NoReturn:
+    from trezor.ui.layouts import show_error_and_raise
 
-    text = Text("Wrong PIN", ui.ICON_WRONG, ui.RED)
-    text.normal("The PIN you entered is", "invalid.")
-    await confirm(ctx, text, confirm=None, cancel="Close")
+    await show_error_and_raise(
+        ctx,
+        "warning_wrong_pin",
+        header="Wrong PIN",
+        content="The PIN you entered is invalid.",
+        red=True,
+        exc=wire.PinInvalid,
+    )
+    assert False
 
 
-async def show_pin_matches_wipe_code(ctx: wire.Context) -> None:
-    from apps.common.confirm import confirm
+async def error_pin_matches_wipe_code(ctx: wire.Context) -> NoReturn:
+    from trezor.ui.layouts import show_error_and_raise
 
-    text = Text("Invalid PIN", ui.ICON_WRONG, ui.RED)
-    text.normal("The new PIN must be", "different from your", "wipe code.")
-    await confirm(ctx, text, confirm=None, cancel="Close")
+    await show_error_and_raise(
+        ctx,
+        "warning_invalid_new_pin",
+        header="Invalid PIN",
+        content="The new PIN must be different from your\nwipe code.",
+        red=True,
+        exc=wire.PinInvalid,
+    )
+    assert False

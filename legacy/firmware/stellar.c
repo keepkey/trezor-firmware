@@ -1150,7 +1150,6 @@ void stellar_fillSignedTx(StellarSignedTx *resp) {
   // signing
   memcpy(resp->public_key.bytes, stellar_activeTx.signing_pubkey, 32);
   resp->public_key.size = 32;
-  resp->has_public_key = true;
 
   // Add the signature (note that this does not include the 4-byte hint since it
   // can be calculated from the public key)
@@ -1159,7 +1158,6 @@ void stellar_fillSignedTx(StellarSignedTx *resp) {
   stellar_getSignatureForActiveTx(signature);
   memcpy(resp->signature.bytes, signature, sizeof(signature));
   resp->signature.size = sizeof(signature);
-  resp->has_signature = true;
 }
 
 bool stellar_allOperationsConfirmed() {
@@ -1241,7 +1239,7 @@ void stellar_format_price(uint32_t numerator, uint32_t denominator, char *out,
   }
 
   // Format with bn_format_uint64
-  bn_format_uint64(value, NULL, NULL, scale, 0, false, out, outlen);
+  bn_format_uint64(value, NULL, NULL, 6, 6 - scale, true, out, outlen);
 }
 
 /*
@@ -1460,7 +1458,7 @@ const HDNode *stellar_deriveNode(const uint32_t *address_n,
   const char *curve = "ed25519";
 
   // Device not initialized, passphrase request cancelled, or unsupported curve
-  if (!config_getRootNode(&node, curve, true)) {
+  if (!config_getRootNode(&node, curve)) {
     return 0;
   }
   // Failed to derive private key
@@ -1792,7 +1790,7 @@ void stellar_layoutSigningDialog(const char *line1, const char *line2,
   offset_y += line_height;
 
   // Cancel button
-  layoutButtonNo("Cancel", &bmp_btn_cancel);
+  layoutButtonNo(_("Cancel"), &bmp_btn_cancel);
 
   // Warnings (drawn centered between the buttons
   if (warning) {

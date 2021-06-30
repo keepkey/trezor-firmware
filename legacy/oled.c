@@ -276,7 +276,7 @@ static uint8_t convert_char(const char a) {
   // non-printable ASCII character
   if (c < ' ') {
     last_was_utf8 = 0;
-    return '_';
+    return 0x7f;
   }
 
   // regular ASCII character
@@ -290,7 +290,7 @@ static uint8_t convert_char(const char a) {
   // bytes 11xxxxxx are first bytes of UTF-8 characters
   if (c >= 0xC0) {
     last_was_utf8 = 1;
-    return '_';
+    return 0x7f;
   }
 
   if (last_was_utf8) {
@@ -298,7 +298,7 @@ static uint8_t convert_char(const char a) {
     return 0;  // skip glyph
   } else {
     // ... or they are just non-printable ASCII characters
-    return '_';
+    return 0x7f;
   }
 
   return 0;
@@ -340,16 +340,25 @@ void oledDrawStringRight(int x, int y, const char *text, uint8_t font) {
   oledDrawString(x, y, text, font);
 }
 
-void oledDrawBitmap(int x, int y, const BITMAP *bmp) {
+static void oled_draw_bitmap_flip(int x, int y, const BITMAP *bmp, bool flip) {
   for (int i = 0; i < bmp->width; i++) {
+    int ii = flip ? (bmp->width - 1 - i) : i;
     for (int j = 0; j < bmp->height; j++) {
-      if (bmp->data[(i / 8) + j * bmp->width / 8] & (1 << (7 - i % 8))) {
+      if (bmp->data[(ii / 8) + j * bmp->width / 8] & (1 << (7 - ii % 8))) {
         oledDrawPixel(x + i, y + j);
       } else {
         oledClearPixel(x + i, y + j);
       }
     }
   }
+}
+
+void oledDrawBitmap(int x, int y, const BITMAP *bmp) {
+  oled_draw_bitmap_flip(x, y, bmp, false);
+}
+
+void oledDrawBitmapFlip(int x, int y, const BITMAP *bmp) {
+  oled_draw_bitmap_flip(x, y, bmp, true);
 }
 
 /*

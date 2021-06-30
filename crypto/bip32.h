@@ -31,6 +31,12 @@
 #include "ed25519-donna/ed25519.h"
 #include "options.h"
 
+// Maximum length of a Base58Check-encoded extended public or private key.
+#define XPUB_MAXLEN 112
+
+// Maximum length of a Base58Check-encoded address.
+#define ADDRESS_MAXLEN 39
+
 typedef struct {
   const char *bip32_name;     // string for generating BIP32 xprv from seed
   const ecdsa_curve *params;  // ecdsa curve parameters, null for ed25519
@@ -133,9 +139,13 @@ int hdnode_serialize_public(const HDNode *node, uint32_t fingerprint,
 int hdnode_serialize_private(const HDNode *node, uint32_t fingerprint,
                              uint32_t version, char *str, int strsize);
 
-int hdnode_deserialize(const char *str, uint32_t version_public,
-                       uint32_t version_private, const char *curve,
-                       HDNode *node, uint32_t *fingerprint);
+int hdnode_deserialize_public(const char *str, uint32_t version,
+                              const char *curve, HDNode *node,
+                              uint32_t *fingerprint);
+
+int hdnode_deserialize_private(const char *str, uint32_t version,
+                               const char *curve, HDNode *node,
+                               uint32_t *fingerprint);
 
 void hdnode_get_address_raw(HDNode *node, uint32_t version, uint8_t *addr_raw);
 void hdnode_get_address(HDNode *node, uint32_t version, char *addr,

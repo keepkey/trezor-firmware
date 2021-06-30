@@ -12,7 +12,12 @@ class aes:
     OFB: int
     CTR: int
 
-    def __init__(self, mode: int, key: bytes, iv: bytes = None) -> None:
+    def __init__(
+        self,
+        mode: int,
+        key: bytes,
+        iv: bytes | None = None,
+    ) -> None:
         """
         Initialize AES context.
         """
@@ -36,7 +41,7 @@ class blake256:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None) -> None:
+    def __init__(self, data: bytes | None = None) -> None:
         """
         Creates a hash context object.
         """
@@ -62,9 +67,10 @@ class blake2b:
 
     def __init__(
         self,
-        data: bytes = None,
+        data: bytes | None = None,
         outlen: int = blake2b.digest_size,
-        personal: bytes = None,
+        key: bytes | None = None,
+        personal: bytes | None = None,
     ) -> None:
         """
         Creates a hash context object.
@@ -91,10 +97,10 @@ class blake2s:
 
     def __init__(
         self,
-        data: bytes = None,
+        data: bytes | None = None,
         outlen: int = blake2s.digest_size,
-        key: bytes = None,
-        personal: bytes = None,
+        key: bytes | None = None,
+        personal: bytes | None = None,
     ) -> None:
         """
         Creates a hash context object.
@@ -156,7 +162,7 @@ class groestl512:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None) -> None:
+    def __init__(self, data: bytes | None = None) -> None:
         """
         Creates a hash context object.
         """
@@ -169,6 +175,35 @@ class groestl512:
     def digest(self) -> bytes:
         """
         Returns the digest of hashed data.
+        """
+
+
+# extmod/modtrezorcrypto/modtrezorcrypto-hmac.h
+class hmac:
+    """
+    HMAC context.
+    """
+    SHA256: int
+    SHA512: int
+
+    def __init__(
+        self,
+        hashtype: int,
+        key: bytes,
+        message: bytes | None = None,
+    ) -> None:
+        """
+        Create a HMAC context.
+        """
+
+    def update(self, message: bytes) -> None:
+        """
+        Update a HMAC context.
+        """
+
+    def digest(self) -> bytes:
+        """
+        Return the digest of processed data so far.
         """
 
 
@@ -185,7 +220,7 @@ class pbkdf2:
         prf: int,
         password: bytes,
         salt: bytes,
-        iterations: int = None,
+        iterations: int | None = None,
         blocknr: int = 1,
     ) -> None:
         """
@@ -203,23 +238,6 @@ class pbkdf2:
         """
 
 
-# extmod/modtrezorcrypto/modtrezorcrypto-rfc6979.h
-class rfc6979:
-    """
-    RFC6979 context.
-    """
-
-    def __init__(self, secret_key: bytes, hash: bytes) -> None:
-        """
-        Initialize RFC6979 context from secret key and a hash.
-        """
-
-    def next(self) -> bytes:
-        """
-        Compute next 32-bytes of pseudorandom data.
-        """
-
-
 # extmod/modtrezorcrypto/modtrezorcrypto-ripemd160.h
 class ripemd160:
     """
@@ -228,7 +246,7 @@ class ripemd160:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None) -> None:
+    def __init__(self, data: bytes | None = None) -> None:
         """
         Creates a hash context object.
         """
@@ -252,7 +270,7 @@ class sha1:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None) -> None:
+    def __init__(self, data: bytes | None = None) -> None:
         """
         Creates a hash context object.
         """
@@ -276,7 +294,7 @@ class sha256:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None) -> None:
+    def __init__(self, data: bytes | None = None) -> None:
         """
         Creates a hash context object.
         """
@@ -300,7 +318,11 @@ class sha3_256:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None, keccak: bool = False) -> None:
+    def __init__(
+        self,
+        data: bytes | None = None,
+        keccak: bool = False,
+    ) -> None:
         """
         Creates a hash context object.
         """
@@ -329,7 +351,11 @@ class sha3_512:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None, keccak: bool = False) -> None:
+    def __init__(
+        self,
+        data: bytes | None = None,
+        keccak: bool = False,
+    ) -> None:
         """
         Creates a hash context object.
         """
@@ -358,7 +384,7 @@ class sha512:
     block_size: int
     digest_size: int
 
-    def __init__(self, data: bytes = None) -> None:
+    def __init__(self, data: bytes | None = None) -> None:
         """
         Creates a hash context object.
         """

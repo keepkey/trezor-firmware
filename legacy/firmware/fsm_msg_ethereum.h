@@ -30,8 +30,8 @@ void fsm_msgEthereumGetPublicKey(const EthereumGetPublicKey *msg) {
 
   const char *curve = coin->curve_name;
   uint32_t fingerprint;
-  HDNode *node = node = fsm_getDerivedNode(curve, msg->address_n,
-                                           msg->address_n_count, &fingerprint);
+  HDNode *node = fsm_getDerivedNode(curve, msg->address_n, msg->address_n_count,
+                                    &fingerprint);
   if (!node) return;
   hdnode_fill_public_key(node);
 
@@ -44,18 +44,15 @@ void fsm_msgEthereumGetPublicKey(const EthereumGetPublicKey *msg) {
     }
   }
 
-  resp->has_node = true;
   resp->node.depth = node->depth;
   resp->node.fingerprint = fingerprint;
   resp->node.child_num = node->child_num;
   resp->node.chain_code.size = 32;
   memcpy(resp->node.chain_code.bytes, node->chain_code, 32);
   resp->node.has_private_key = false;
-  resp->node.has_public_key = true;
   resp->node.public_key.size = 33;
   memcpy(resp->node.public_key.bytes, node->public_key, 33);
 
-  resp->has_xpub = true;
   hdnode_serialize_public(node, fingerprint, coin->xpub_magic, resp->xpub,
                           sizeof(resp->xpub));
 
@@ -121,7 +118,7 @@ void fsm_msgEthereumGetAddress(const EthereumGetAddress *msg) {
     strlcpy(desc, "Address:", sizeof(desc));
 
     if (!fsm_layoutAddress(resp->address, desc, false, 0, msg->address_n,
-                           msg->address_n_count, true)) {
+                           msg->address_n_count, true, NULL, 0, 0, NULL)) {
       return;
     }
   }

@@ -46,7 +46,6 @@
 #include STM32_HAL_H
 
 #include <string.h>
-#include "mpconfigport.h"
 
 #include "dma.h"
 #include "irq.h"
@@ -215,7 +214,9 @@ uint64_t sdcard_get_capacity_in_bytes(void) {
 
 void SDIO_IRQHandler(void) {
   IRQ_ENTER(SDIO_IRQn);
-  HAL_SD_IRQHandler(&sd_handle);
+  if (sd_handle.Instance) {
+    HAL_SD_IRQHandler(&sd_handle);
+  }
   IRQ_EXIT(SDIO_IRQn);
 }
 

@@ -13,6 +13,8 @@ def publickey(secret_key: bytes, compressed: bool = True) -> bytes:
     """
     Computes public key from secret key.
     """
+CANONICAL_SIG_ETHEREUM: int = 1
+CANONICAL_SIG_EOS: int = 2
 
 
 # extmod/modtrezorcrypto/modtrezorcrypto-secp256k1.h
@@ -20,7 +22,7 @@ def sign(
     secret_key: bytes,
     digest: bytes,
     compressed: bool = True,
-    canonical: int = None,
+    canonical: int | None = None,
 ) -> bytes:
     """
     Uses secret key to produce the signature of the digest.

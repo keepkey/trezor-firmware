@@ -79,22 +79,31 @@ typedef struct _Storage {
 
 extern Storage configUpdate;
 
-#define MAX_PIN_LEN 9
+#define MAX_PIN_LEN 50
 #define MAX_LABEL_LEN 32
 #define MAX_LANGUAGE_LEN 16
 #define MAX_MNEMONIC_LEN 240
 #define HOMESCREEN_SIZE 1024
 #define UUID_SIZE 12
 
+#if DEBUG_LINK
+#define MIN_AUTOLOCK_DELAY_MS (10 * 1000U)  // 10 seconds
+#else
+#define MIN_AUTOLOCK_DELAY_MS (60 * 1000U)  // 1 minute
+#endif
+#define MAX_AUTOLOCK_DELAY_MS 0x20000000U  // ~6 days
+
 void config_init(void);
 void session_clear(bool lock);
+void session_endCurrentSession(void);
+void config_lockDevice(void);
 
 void config_loadDevice(const LoadDevice *msg);
 
-const uint8_t *config_getSeed(bool usePassphrase);
+const uint8_t *config_getSeed(void);
 
 bool config_getU2FRoot(HDNode *node);
-bool config_getRootNode(HDNode *node, const char *curve, bool usePassphrase);
+bool config_getRootNode(HDNode *node, const char *curve);
 
 bool config_getLabel(char *dest, uint16_t dest_size);
 void config_setLabel(const char *label);
@@ -108,13 +117,11 @@ bool config_getPassphraseProtection(bool *passphrase_protection);
 bool config_getHomescreen(uint8_t *dest, uint16_t dest_size);
 void config_setHomescreen(const uint8_t *data, uint32_t size);
 
-void session_cachePassphrase(const char *passphrase);
-bool session_isPassphraseCached(void);
-bool session_getState(const uint8_t *salt, uint8_t *state,
-                      const char *passphrase);
+uint8_t *session_startSession(const uint8_t *received_session_id);
 
 bool config_setMnemonic(const char *mnemonic);
 bool config_containsMnemonic(const char *mnemonic);
+bool config_hasMnemonic(void);
 bool config_getMnemonic(char *dest, uint16_t dest_size);
 bool config_getMnemonicBytes(uint8_t *dest, uint16_t dest_size,
                              uint16_t *real_size);
@@ -154,6 +161,9 @@ bool config_getFlags(uint32_t *flags);
 
 uint32_t config_getAutoLockDelayMs(void);
 void config_setAutoLockDelayMs(uint32_t auto_lock_delay_ms);
+
+SafetyCheckLevel config_getSafetyCheckLevel(void);
+void config_setSafetyCheckLevel(SafetyCheckLevel safety_check_level);
 
 void config_wipe(void);
 

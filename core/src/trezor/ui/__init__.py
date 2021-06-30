@@ -3,16 +3,13 @@ import utime
 from micropython import const
 from trezorui import Display
 
-from trezor import io, loop, res, utils
-
-if __debug__:
-    from apps.debug import notify_layout_change
+from trezor import io, loop, res, utils, workflow
 
 if False:
-    from typing import Any, Awaitable, Generator, List, Tuple, TypeVar
+    from typing import Any, Awaitable, Generator, TypeVar
 
-    Pos = Tuple[int, int]
-    Area = Tuple[int, int, int, int]
+    Pos = tuple[int, int]
+    Area = tuple[int, int, int, int]
     ResultValue = TypeVar("ResultValue")
 
 # all rendering is done through a singleton of `Display`
@@ -22,8 +19,6 @@ display = Display()
 NORMAL = Display.FONT_NORMAL
 BOLD = Display.FONT_BOLD
 MONO = Display.FONT_MONO
-MONO_BOLD = Display.FONT_MONO_BOLD
-SIZE = Display.FONT_SIZE
 WIDTH = Display.WIDTH
 HEIGHT = Display.HEIGHT
 
@@ -40,17 +35,21 @@ _alert_in_progress = False
 # in debug mode, display an indicator in top right corner
 if __debug__:
 
-    def debug_display_refresh() -> None:
-        display.bar(Display.WIDTH - 8, 0, 8, 8, 0xF800)
-        display.refresh()
-        if utils.SAVE_SCREEN:
-            display.save("refresh")
+    def refresh() -> None:
+        from apps.debug import screenshot
 
-    loop.after_step_hook = debug_display_refresh
+        if not screenshot():
+            display.bar(Display.WIDTH - 8, 0, 8, 8, 0xF800)
+        display.refresh()
+
+
+else:
+    refresh = display.refresh
+
 
 # in both debug and production, emulator needs to draw the screen explicitly
-elif utils.EMULATOR:
-    loop.after_step_hook = display.refresh
+if utils.EMULATOR:
+    loop.after_step_hook = refresh
 
 
 def lerpi(a: int, b: int, t: float) -> int:
@@ -82,8 +81,8 @@ def pulse(period: int, offset: int = 0) -> float:
 
 
 async def _alert(count: int) -> None:
-    short_sleep = loop.sleep(20000)
-    long_sleep = loop.sleep(80000)
+    short_sleep = loop.sleep(20)
+    long_sleep = loop.sleep(80)
     for i in range(count * 2):
         if i % 2 == 0:
             display.backlight(style.BACKLIGHT_MAX)
@@ -120,7 +119,7 @@ async def click() -> Pos:
 
 def backlight_fade(val: int, delay: int = 14000, step: int = 15) -> None:
     if __debug__:
-        if utils.DISABLE_FADE:
+        if utils.DISABLE_ANIMATION:
             display.backlight(val)
             return
     current = display.backlight()
@@ -157,6 +156,24 @@ def header_error(message: str, clear: bool = True) -> None:
         display.bar(0, 30, WIDTH, HEIGHT - 30, style.BG)
 
 
+def draw_simple(t: Component) -> None:  # noqa: F405
+    """Render a component synchronously.
+
+    Useful when you need to put something on screen and go on to do other things.
+
+    This function bypasses the UI workflow engine, so other layouts will not know
+    that something was drawn over them. In particular, if no other Layout is shown
+    in a workflow, the homescreen will not redraw when the workflow is finished.
+    Make sure you use `workflow.close_others()` before invoking this function
+    (note that `workflow.close_others()` is implicitly called with `button_request()`).
+    """
+    backlight_fade(style.BACKLIGHT_DIM)
+    display.clear()
+    t.on_render()
+    refresh()
+    backlight_fade(style.BACKLIGHT_NORMAL)
+
+
 def grid(
     i: int,  # i-th cell of the table of which we wish to return Area (snake-like starting with 0)
     n_x: int = 3,  # number of rows in the table
@@ -170,7 +187,7 @@ def grid(
     spacing: int = 0,  # spacing size between cells
 ) -> Area:
     """
-    Returns area (tuple of four integers, in pixels) of a cell on i-th possition
+    Returns area (tuple of four integers, in pixels) of a cell on i-th position
     in a table you define yourself.  Example:
 
     >>> ui.grid(4, n_x=2, n_y=3, start_x=20, start_y=20)
@@ -202,9 +219,9 @@ RENDER = const(-255)
 # Event dispatched when components should mark themselves for re-painting.
 REPAINT = const(-256)
 
-# How long, in microseconds, should the layout rendering task sleep betweeen
+# How long, in milliseconds, should the layout rendering task sleep between
 # the render calls.
-_RENDER_DELAY_US = const(10000)  # 10 msec
+_RENDER_DELAY_MS = const(10)
 
 
 class Component:
@@ -218,6 +235,9 @@ class Component:
     methods (`on_*`).  Components signal a completion to the layout by raising
     an instance of `Result`.
     """
+
+    def __init__(self) -> None:
+        self.repaint = True
 
     def dispatch(self, event: int, x: int, y: int) -> None:
         if event is RENDER:
@@ -245,7 +265,7 @@ class Component:
 
     if __debug__:
 
-        def read_content(self) -> List[str]:
+        def read_content(self) -> list[str]:
             return [self.__class__.__name__]
 
 
@@ -258,6 +278,7 @@ class Result(Exception):
     """
 
     def __init__(self, value: ResultValue) -> None:
+        super().__init__()
         self.value = value
 
 
@@ -284,11 +305,20 @@ class Layout(Component):
     raised, usually from some of the child components.
     """
 
+    BACKLIGHT_LEVEL = style.BACKLIGHT_NORMAL
+    RENDER_SLEEP: loop.Syscall = loop.sleep(_RENDER_DELAY_MS)
+
     async def __iter__(self) -> ResultValue:
         """
         Run the layout and wait until it completes.  Returns the result value.
         Usually not overridden.
         """
+        if __debug__:
+            # we want to call notify_layout_change() when the rendering is done;
+            # but only the first time the layout is awaited. Here we indicate that we
+            # are being awaited, and in handle_rendering() we send the appropriate event
+            self.should_notify_layout_change = True
+
         value = None
         try:
             # If any other layout is running (waiting on the layout channel),
@@ -301,8 +331,6 @@ class Layout(Component):
             # layout channel.  This allows other layouts to cancel us, and the
             # layout tasks to trigger restart by exiting (new tasks are created
             # and we continue, because we are in a loop).
-            if __debug__:
-                notify_layout_change(self)
             while True:
                 await loop.race(layout_chan.take(), *self.create_tasks())
         except Result as result:
@@ -313,7 +341,7 @@ class Layout(Component):
     def __await__(self) -> Generator[Any, Any, ResultValue]:
         return self.__iter__()  # type: ignore
 
-    def create_tasks(self) -> Tuple[loop.Task, ...]:
+    def create_tasks(self) -> tuple[loop.Task, ...]:
         """
         Called from `__iter__`.  Creates and returns a sequence of tasks that
         run this layout.  Tasks are executed in parallel.  When one of them
@@ -328,13 +356,13 @@ class Layout(Component):
         while True:
             # Using `yield` instead of `await` to avoid allocations.
             event, x, y = yield touch
+            workflow.idle_timer.touch()
             self.dispatch(event, x, y)
             # We dispatch a render event right after the touch.  Quick and dirty
             # way to get the lowest input-to-render latency.
             self.dispatch(RENDER, 0, 0)
 
-    def handle_rendering(self) -> loop.Task:  # type: ignore
-        """Task that is rendering the layout in a busy loop."""
+    def _before_render(self) -> None:
         # Before the first render, we dim the display.
         backlight_fade(style.BACKLIGHT_DIM)
         # Clear the screen of any leftovers, make sure everything is marked for
@@ -343,12 +371,26 @@ class Layout(Component):
         display.clear()
         self.dispatch(REPAINT, 0, 0)
         self.dispatch(RENDER, 0, 0)
+
+        if __debug__ and self.should_notify_layout_change:
+            from apps.debug import notify_layout_change
+
+            # notify about change and do not notify again until next await.
+            # (handle_rendering might be called multiple times in a single await,
+            # because of the endless loop in __iter__)
+            self.should_notify_layout_change = False
+            notify_layout_change(self)
+
         # Display is usually refreshed after every loop step, but here we are
         # rendering everything synchronously, so refresh it manually and turn
         # the brightness on again.
-        display.refresh()
-        backlight_fade(style.BACKLIGHT_NORMAL)
-        sleep = loop.sleep(_RENDER_DELAY_US)
+        refresh()
+        backlight_fade(self.BACKLIGHT_LEVEL)
+
+    def handle_rendering(self) -> loop.Task:  # type: ignore
+        """Task that is rendering the layout in a busy loop."""
+        self._before_render()
+        sleep = self.RENDER_SLEEP
         while True:
             # Wait for a couple of ms and render the layout again.  Because
             # components use re-paint marking, they do not really draw on the

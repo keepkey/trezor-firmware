@@ -17,6 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "py/objstr.h"
 #include "py/runtime.h"
 
 #include "version.h"
@@ -36,9 +37,9 @@
 ///     expected to avoid any invalid memory access.
 ///     """
 STATIC mp_obj_t mod_trezorutils_consteq(mp_obj_t sec, mp_obj_t pub) {
-  mp_buffer_info_t secbuf;
+  mp_buffer_info_t secbuf = {0};
   mp_get_buffer_raise(sec, &secbuf, MP_BUFFER_READ);
-  mp_buffer_info_t pubbuf;
+  mp_buffer_info_t pubbuf = {0};
   mp_get_buffer_raise(pub, &pubbuf, MP_BUFFER_READ);
 
   size_t diff = secbuf.len - pubbuf.len;
@@ -58,25 +59,35 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_trezorutils_consteq_obj,
                                  mod_trezorutils_consteq);
 
 /// def memcpy(
-///     dst: bytearray, dst_ofs: int, src: bytes, src_ofs: int, n: int
+///     dst: bytearray | memoryview,
+///     dst_ofs: int,
+///     src: bytes,
+///     src_ofs: int,
+///     n: int | None = None,
 /// ) -> int:
 ///     """
 ///     Copies at most `n` bytes from `src` at offset `src_ofs` to
-///     `dst` at offset `dst_ofs`.  Returns the number of actually
-///     copied bytes.
+///     `dst` at offset `dst_ofs`. Returns the number of actually
+///     copied bytes. If `n` is not specified, tries to copy
+///     as much as possible.
 ///     """
 STATIC mp_obj_t mod_trezorutils_memcpy(size_t n_args, const mp_obj_t *args) {
-  mp_arg_check_num(n_args, 0, 5, 5, false);
+  mp_arg_check_num(n_args, 0, 4, 5, false);
 
-  mp_buffer_info_t dst;
+  mp_buffer_info_t dst = {0};
   mp_get_buffer_raise(args[0], &dst, MP_BUFFER_WRITE);
   uint32_t dst_ofs = trezor_obj_get_uint(args[1]);
 
-  mp_buffer_info_t src;
+  mp_buffer_info_t src = {0};
   mp_get_buffer_raise(args[2], &src, MP_BUFFER_READ);
   uint32_t src_ofs = trezor_obj_get_uint(args[3]);
 
-  uint32_t n = trezor_obj_get_uint(args[4]);
+  uint32_t n = 0;
+  if (n_args > 4) {
+    n = trezor_obj_get_uint(args[4]);
+  } else {
+    n = src.len;
+  }
 
   size_t dst_rem = (dst_ofs < dst.len) ? dst.len - dst_ofs : 0;
   size_t src_rem = (src_ofs < src.len) ? src.len - src_ofs : 0;
@@ -86,15 +97,15 @@ STATIC mp_obj_t mod_trezorutils_memcpy(size_t n_args, const mp_obj_t *args) {
 
   return mp_obj_new_int(ncpy);
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorutils_memcpy_obj, 5, 5,
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorutils_memcpy_obj, 4, 5,
                                            mod_trezorutils_memcpy);
 
-/// def halt(msg: str = None) -> None:
+/// def halt(msg: str | None = None) -> None:
 ///     """
 ///     Halts execution.
 ///     """
 STATIC mp_obj_t mod_trezorutils_halt(size_t n_args, const mp_obj_t *args) {
-  mp_buffer_info_t msg;
+  mp_buffer_info_t msg = {0};
   if (n_args > 0 && mp_get_buffer(args[0], &msg, MP_BUFFER_READ)) {
     ensure(secfalse, msg.buf);
   } else {
@@ -105,39 +116,28 @@ STATIC mp_obj_t mod_trezorutils_halt(size_t n_args, const mp_obj_t *args) {
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorutils_halt_obj, 0, 1,
                                            mod_trezorutils_halt);
 
-/// def set_mode_unprivileged() -> None:
-///     """
-///     Set unprivileged mode.
-///     """
-STATIC mp_obj_t mod_trezorutils_set_mode_unprivileged(void) {
-#ifndef TREZOR_EMULATOR
-  __asm__ volatile("msr control, %0" ::"r"(0x1));
-  __asm__ volatile("isb");
-#endif
-  return mp_const_none;
-}
-STATIC MP_DEFINE_CONST_FUN_OBJ_0(mod_trezorutils_set_mode_unprivileged_obj,
-                                 mod_trezorutils_set_mode_unprivileged);
+STATIC mp_obj_str_t mod_trezorutils_revision_obj = {
+    {&mp_type_bytes}, 0, sizeof(SCM_REVISION) - 1, (const byte *)SCM_REVISION};
 
 #define PASTER(s) MP_QSTR_##s
 #define MP_QSTR(s) PASTER(s)
 
-/// GITREV: str
+/// SCM_REVISION: bytes
 /// VERSION_MAJOR: int
 /// VERSION_MINOR: int
 /// VERSION_PATCH: int
 /// MODEL: str
 /// EMULATOR: bool
+/// BITCOIN_ONLY: bool
 
 STATIC const mp_rom_map_elem_t mp_module_trezorutils_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_trezorutils)},
     {MP_ROM_QSTR(MP_QSTR_consteq), MP_ROM_PTR(&mod_trezorutils_consteq_obj)},
     {MP_ROM_QSTR(MP_QSTR_memcpy), MP_ROM_PTR(&mod_trezorutils_memcpy_obj)},
     {MP_ROM_QSTR(MP_QSTR_halt), MP_ROM_PTR(&mod_trezorutils_halt_obj)},
-    {MP_ROM_QSTR(MP_QSTR_set_mode_unprivileged),
-     MP_ROM_PTR(&mod_trezorutils_set_mode_unprivileged_obj)},
     // various built-in constants
-    {MP_ROM_QSTR(MP_QSTR_GITREV), MP_ROM_QSTR(MP_QSTR(GITREV))},
+    {MP_ROM_QSTR(MP_QSTR_SCM_REVISION),
+     MP_ROM_PTR(&mod_trezorutils_revision_obj)},
     {MP_ROM_QSTR(MP_QSTR_VERSION_MAJOR), MP_ROM_INT(VERSION_MAJOR)},
     {MP_ROM_QSTR(MP_QSTR_VERSION_MINOR), MP_ROM_INT(VERSION_MINOR)},
     {MP_ROM_QSTR(MP_QSTR_VERSION_PATCH), MP_ROM_INT(VERSION_PATCH)},
@@ -161,5 +161,8 @@ const mp_obj_module_t mp_module_trezorutils = {
     .base = {&mp_type_module},
     .globals = (mp_obj_dict_t *)&mp_module_trezorutils_globals,
 };
+
+MP_REGISTER_MODULE(MP_QSTR_trezorutils, mp_module_trezorutils,
+                   MICROPY_PY_TREZORUTILS);
 
 #endif  // MICROPY_PY_TREZORUTILS

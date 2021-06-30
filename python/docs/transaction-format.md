@@ -15,7 +15,7 @@ The root is an object with the following attributes:
   missing, `"Bitcoin"` is used.
 * __`inputs`__: array of `TxInputType` objects. Must be present.
 * __`outputs`__: array of `TxOutputType` objects. Must be present.
-* __`details`__: object of type `SignTx`, specifying transaction metadata. Can be
+* __`details`__: object whose keys correspond to metadata on the `SignTx` type. Can be
   omitted.
 * __`prev_txes`__: object whose keys are hex-encoded transaction hashes, and values are
   objects of type `TransactionType`. When signing a transaction with non-SegWit inputs,
@@ -60,8 +60,6 @@ message TxInputType {
     optional uint64 amount = 8;                     // amount of previous transaction output
     optional uint32 decred_tree = 9;                // only for Decred
     optional uint32 decred_script_version = 10;     // only for Decred
-    optional bytes prev_block_hash_bip115 = 11;     // block hash of previous transaction output (for bip115 implementation)
-    optional uint32 prev_block_height_bip115 = 12;  // block height of previous transaction output (for bip115 implementation)
 }
 ```
 
@@ -73,7 +71,7 @@ The field `script_sig` must not be set.
 
 The field `multisig` can be used for multisig inputs. Documenting the multisig structure is TBD. With regular inputs, `multisig` must not be set.
 
-`decred` and `bip115` fields must only be set when relevant to your currency.
+`decred` fields must only be set when relevant to your currency.
 
 ### Outputs
 
@@ -94,9 +92,6 @@ message TxOutputType {
     optional MultisigRedeemScriptType multisig = 5; // multisig output definition
     optional bytes op_return_data = 6;              // defines op_return data
     optional uint32 decred_script_version = 7;      // only for Decred
-    optional bytes block_hash_bip115 = 8;           // block hash of existing block (recommended current_block - 300) (for bip115 implementation)
-    optional uint32 block_height_bip115 = 9;        // block height of existing block (recommended current_block - 300) (for bip115 implementation)
- 
 ```
 
 All outputs must have an `amount` and a `script_type`.
@@ -112,14 +107,12 @@ For `OP_RETURN` outputs, `script_type` must be set to `"PAYTOOPRETURN"` and
 `op_return_data` must be filled appropriately. `address_n` and `address` must not be
 set.
 
-`decred` and `bip115` fields must only be set when relevant to your currency.
+`decred` fields must only be set when relevant to your currency.
 
 ### Transaction metadata
 
-The following is a shortened definition of the `SignTx` protobuf message. Note that it
-is possible to set fields `outputs_count`, `inputs_count` and `coin_name`, but their
-values will be ignored. Instead, the number of elements in `outputs`, `inputs`, and the
-value of `coin_name` from root object will be used.
+The following is a shortened definition of the `SignTx` protobuf message, containing
+all possible fields that are accepted in the `details` object.
 
 All fields are optional unless required by your currency.
 
@@ -128,9 +121,8 @@ message SignTx {
     optional uint32 version = 4;           // transaction version
     optional uint32 lock_time = 5;         // transaction lock_time
     optional uint32 expiry = 6;            // only for Decred and Zcash
-    optional bool overwintered = 7;        // only for Zcash
     optional uint32 version_group_id = 8;  // only for Zcash, nVersionGroupId when overwintered is set
-    optional uint32 timestamp = 9;         // only for Capricoin, transaction timestamp
+    optional uint32 timestamp = 9;         // only for Peercoin, transaction timestamp
     optional uint32 branch_id = 10;        // only for Zcash, BRANCH_ID when overwintered is set
 }
 ```
@@ -164,7 +156,7 @@ message TransactionType {
     optional uint32 expiry = 10;            // only for Decred and Zcash
     optional bool overwintered = 11;        // only for Zcash
     optional uint32 version_group_id = 12;  // only for Zcash, nVersionGroupId when overwintered is set
-    optional uint32 timestamp = 13;         // only for Capricoin, transaction timestamp
+    optional uint32 timestamp = 13;         // only for Peercoin, transaction timestamp
     optional uint32 branch_id = 14;         // only for Zcash, BRANCH_ID when overwintered is set
 }
 ```
@@ -197,13 +189,13 @@ Otherwise the encoding is identical:
 
 The JSON below encodes a transaction with the following inputs:
 
-* [e9cec1644db8fa95fe639a9b503a63ea587d2f4e480d3847703e3ec73adf6b5a](https://btc5.trezor.io/tx/e9cec1644db8fa95fe639a9b503a63ea587d2f4e480d3847703e3ec73adf6b5a)  
-  output **0** (P2PKH address 1Jw5FrKhi2aWbbF4h3QRWLog5AjsJYGswv)  
-  at derivation path **m/44'/0'/0'/0/282**  
+* [e9cec1644db8fa95fe639a9b503a63ea587d2f4e480d3847703e3ec73adf6b5a](https://btc5.trezor.io/tx/e9cec1644db8fa95fe639a9b503a63ea587d2f4e480d3847703e3ec73adf6b5a)
+  output **0** (P2PKH address 1Jw5FrKhi2aWbbF4h3QRWLog5AjsJYGswv)
+  at derivation path **m/44'/0'/0'/0/282**
   amount **85 170** sat
-* [1f545c0ca1f2c055e199c70457025c1e393edd013a274a976187115a5c601155](https://btc5.trezor.io/tx/1f545c0ca1f2c055e199c70457025c1e393edd013a274a976187115a5c601155)  
-  output **0** (P2SH-SegWit address 3DEAk9KGrgvj2gHQ1hyfCXus9hZr9K8Beh)  
-  at derivation path **m/49'/0'/0'/0/55**  
+* [1f545c0ca1f2c055e199c70457025c1e393edd013a274a976187115a5c601155](https://btc5.trezor.io/tx/1f545c0ca1f2c055e199c70457025c1e393edd013a274a976187115a5c601155)
+  output **0** (P2SH-SegWit address 3DEAk9KGrgvj2gHQ1hyfCXus9hZr9K8Beh)
+  at derivation path **m/49'/0'/0'/0/55**
   amount **500 000** sat
 
 And the following outputs:

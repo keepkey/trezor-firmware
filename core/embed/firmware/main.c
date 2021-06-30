@@ -17,6 +17,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include STM32_HAL_H
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,14 +40,24 @@
 #include "display.h"
 #include "flash.h"
 #include "mpu.h"
+#include "random_delays.h"
+#ifdef SYSTEM_VIEW
+#include "systemview.h"
+#endif
 #include "rng.h"
 #include "sdcard.h"
 #include "supervise.h"
 #include "touch.h"
 
+// from util.s
+extern void shutdown_privileged(void);
+
 int main(void) {
-  // initialize pseudo-random number generator
-  drbg_init();
+  random_delays_init();
+
+#ifdef RDI
+  rdi_start();
+#endif
 
   // reinitialize HAL for Trezor One
 #if TREZOR_MODEL == 1
@@ -54,8 +66,14 @@ int main(void) {
 
   collect_hw_entropy();
 
+#ifdef SYSTEM_VIEW
+  enable_systemview();
+#endif
+
 #if TREZOR_MODEL == T
+#if PRODUCTION
   check_and_replace_bootloader();
+#endif
   // Enable MPU
   mpu_config_firmware();
 #endif
@@ -69,9 +87,15 @@ int main(void) {
 #endif
 
 #if TREZOR_MODEL == T
+  // display_init_seq();
   sdcard_init();
   touch_init();
   touch_power_on();
+
+  // jump to unprivileged mode
+  // http://infocenter.arm.com/help/topic/com.arm.doc.dui0552a/CHDBIBGJ.html
+  __asm__ volatile("msr control, %0" ::"r"(0x1));
+  __asm__ volatile("isb");
 
   display_clear();
 #endif
@@ -81,6 +105,11 @@ int main(void) {
   // to recover from limit hit.
   mp_stack_set_top(&_estack);
   mp_stack_set_limit((char *)&_estack - (char *)&_heap_end - 1024);
+
+#if MICROPY_ENABLE_PYSTACK
+  static mp_obj_t pystack[1024];
+  mp_pystack_init(pystack, &pystack[MP_ARRAY_SIZE(pystack)]);
+#endif
 
   // GC init
   printf("CORE: Starting GC\n");
@@ -137,8 +166,6 @@ void UsageFault_Handler(void) {
   error_shutdown("Internal error", "(UF)", NULL, NULL);
 }
 
-void PendSV_Handler(void) { pendsv_isr_handler(); }
-
 void SVC_C_Handler(uint32_t *stack) {
   uint8_t svc_number = ((uint8_t *)stack[6])[-2];
   switch (svc_number) {
@@ -150,6 +177,16 @@ void SVC_C_Handler(uint32_t *stack) {
       break;
     case SVC_SET_PRIORITY:
       NVIC_SetPriority(stack[0], stack[1]);
+      break;
+#ifdef SYSTEM_VIEW
+    case SVC_GET_DWT_CYCCNT:
+      cyccnt_cycles = *DWT_CYCCNT_ADDR;
+      break;
+#endif
+    case SVC_SHUTDOWN:
+      shutdown_privileged();
+      for (;;)
+        ;
       break;
     default:
       stack[0] = 0xffffffff;

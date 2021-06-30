@@ -9,7 +9,7 @@
   "decimals": 8,
   "address_type": 71,
   "address_type_p2sh": 33,
-  "maxfee_kb": 40000000,
+  "maxfee_kb": 14000000000,
   "minfee_kb": 1000,
   "signed_message_header": "Viacoin Signed Message:\n",
   "hash_genesis_block": "4e9b54001f9976049830128ec0331515eaabe35a70970d79971da1539a400ba1",
@@ -17,6 +17,8 @@
   "xpub_magic": 76067358,
   "xpub_magic_segwit_p2sh": 77429938,
   "xpub_magic_segwit_native": 78792518,
+  "xpub_magic_multisig_segwit_p2sh": 76067358,
+  "xpub_magic_multisig_segwit_native": 76067358,
   "bech32_prefix": "via",
   "cashaddr_prefix": null,
   "slip44": 14,
@@ -24,7 +26,6 @@
   "decred": false,
   "fork_id": null,
   "force_bip143": false,
-  "bip115": false,
   "default_fee_b": {
     "Low": 1000,
     "Economy": 7000,
@@ -36,12 +37,10 @@
   "uri_prefix": "viacoin",
   "min_address_length": 27,
   "max_address_length": 34,
-  "bitcore": [
-    "https://explorer.viacoin.org"
-  ],
-  "blockbook": [],
   "negative_fee": false,
   "cooldown": 100,
   "consensus_branch_id": null,
+  "extra_data": false,
+  "timestamp": false,
   "confidential_assets": null
 }

@@ -1,22 +1,17 @@
 import storage.device
-from trezor import ui, workflow
-from trezor.crypto import bip39, slip39
-from trezor.messages import BackupType
-
-if False:
-    from typing import Optional, Tuple
-    from trezor.messages.ResetDevice import EnumTypeBackupType
+from trezor import ui, utils, workflow
+from trezor.enums import BackupType
 
 
-def get() -> Tuple[Optional[bytes], int]:
+def get() -> tuple[bytes | None, int]:
     return get_secret(), get_type()
 
 
-def get_secret() -> Optional[bytes]:
+def get_secret() -> bytes | None:
     return storage.device.get_mnemonic_secret()
 
 
-def get_type() -> EnumTypeBackupType:
+def get_type() -> BackupType:
     return storage.device.get_backup_type()
 
 
@@ -34,39 +29,41 @@ def get_seed(passphrase: str = "", progress_bar: bool = True) -> bytes:
         raise ValueError("Mnemonic not set")
 
     render_func = None
-    if progress_bar:
+    if progress_bar and not utils.DISABLE_ANIMATION:
         _start_progress()
         render_func = _render_progress
 
     if is_bip39():
+        from trezor.crypto import bip39
+
         seed = bip39.seed(mnemonic_secret.decode(), passphrase, render_func)
 
     else:  # SLIP-39
+        from trezor.crypto import slip39
+
         identifier = storage.device.get_slip39_identifier()
         iteration_exponent = storage.device.get_slip39_iteration_exponent()
         if identifier is None or iteration_exponent is None:
             # Identifier or exponent expected but not found
             raise RuntimeError
         seed = slip39.decrypt(
-            identifier, iteration_exponent, mnemonic_secret, passphrase.encode()
+            mnemonic_secret, passphrase.encode(), iteration_exponent, identifier
         )
 
     return seed
 
 
 def _start_progress() -> None:
+    from trezor.ui.components.tt.text import Text
+
     # Because we are drawing to the screen manually, without a layout, we
-    # should make sure that no other layout is running.  At this point, only
-    # the homescreen should be on, so shut it down.
-    workflow.kill_default()
-    ui.backlight_fade(ui.BACKLIGHT_DIM)
-    ui.display.clear()
-    ui.header("Please wait")
-    ui.display.refresh()
-    ui.backlight_fade(ui.BACKLIGHT_NORMAL)
+    # should make sure that no other layout is running.
+    workflow.close_others()
+    t = Text("Please wait", ui.ICON_CONFIG)
+    ui.draw_simple(t)
 
 
 def _render_progress(progress: int, total: int) -> None:
     p = 1000 * progress // total
     ui.display.loader(p, False, 18, ui.WHITE, ui.BG)
-    ui.display.refresh()
+    ui.refresh()

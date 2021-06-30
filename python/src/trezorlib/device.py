@@ -16,101 +16,86 @@
 
 import os
 import time
-import warnings
 
 from . import messages
 from .exceptions import Cancelled
 from .tools import expect, session
-from .transport import enumerate_devices, get_transport
 
 RECOVERY_BACK = "\x08"  # backspace character, sent literally
 
 
-class TrezorDevice:
-    """
-    This class is deprecated. (There is no reason for it to exist in the first
-    place, it is nothing but a collection of two functions.)
-    Instead, please use functions from the ``trezorlib.transport`` module.
-    """
-
-    @classmethod
-    def enumerate(cls):
-        warnings.warn("TrezorDevice is deprecated.", DeprecationWarning)
-        return enumerate_devices()
-
-    @classmethod
-    def find_by_path(cls, path):
-        warnings.warn("TrezorDevice is deprecated.", DeprecationWarning)
-        return get_transport(path, prefix_search=False)
-
-
 @expect(messages.Success, field="message")
+@session
 def apply_settings(
     client,
     label=None,
     language=None,
     use_passphrase=None,
     homescreen=None,
-    passphrase_source=None,
+    passphrase_always_on_device=None,
     auto_lock_delay_ms=None,
     display_rotation=None,
+    safety_checks=None,
+    experimental_features=None,
 ):
-    settings = messages.ApplySettings()
-    if label is not None:
-        settings.label = label
-    if language:
-        settings.language = language
-    if use_passphrase is not None:
-        settings.use_passphrase = use_passphrase
-    if homescreen is not None:
-        settings.homescreen = homescreen
-    if passphrase_source is not None:
-        settings.passphrase_source = passphrase_source
-    if auto_lock_delay_ms is not None:
-        settings.auto_lock_delay_ms = auto_lock_delay_ms
-    if display_rotation is not None:
-        settings.display_rotation = display_rotation
+    settings = messages.ApplySettings(
+        label=label,
+        language=language,
+        use_passphrase=use_passphrase,
+        homescreen=homescreen,
+        passphrase_always_on_device=passphrase_always_on_device,
+        auto_lock_delay_ms=auto_lock_delay_ms,
+        display_rotation=display_rotation,
+        safety_checks=safety_checks,
+        experimental_features=experimental_features,
+    )
 
     out = client.call(settings)
-    client.init_device()  # Reload Features
+    client.refresh_features()
     return out
 
 
 @expect(messages.Success, field="message")
+@session
 def apply_flags(client, flags):
     out = client.call(messages.ApplyFlags(flags=flags))
-    client.init_device()  # Reload Features
+    client.refresh_features()
     return out
 
 
 @expect(messages.Success, field="message")
+@session
 def change_pin(client, remove=False):
     ret = client.call(messages.ChangePin(remove=remove))
-    client.init_device()  # Re-read features
+    client.refresh_features()
     return ret
 
 
 @expect(messages.Success, field="message")
+@session
 def change_wipe_code(client, remove=False):
     ret = client.call(messages.ChangeWipeCode(remove=remove))
-    client.init_device()  # Re-read features
+    client.refresh_features()
     return ret
 
 
 @expect(messages.Success, field="message")
+@session
 def sd_protect(client, operation):
     ret = client.call(messages.SdProtect(operation=operation))
-    client.init_device()
+    client.refresh_features()
     return ret
 
 
 @expect(messages.Success, field="message")
+@session
 def wipe(client):
     ret = client.call(messages.WipeDevice())
     client.init_device()
     return ret
 
 
+@session
 def recover(
     client,
     word_count=24,
@@ -214,6 +199,13 @@ def reset(
 
 
 @expect(messages.Success, field="message")
+@session
 def backup(client):
     ret = client.call(messages.BackupDevice())
+    client.refresh_features()
     return ret
+
+
+@expect(messages.Success, field="message")
+def cancel_authorization(client):
+    return client.call(messages.CancelAuthorization())

@@ -14,7 +14,13 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-from trezorlib.messages import ButtonRequestType as B
+import json
+from pathlib import Path
+
+import pytest
+
+from trezorlib import btc, tools
+from trezorlib.messages import ButtonRequest, ButtonRequestType as B
 
 # fmt: off
 #                1      2     3    4      5      6      7     8      9    10    11    12
@@ -37,7 +43,43 @@ MNEMONIC_SLIP39_ADVANCED_33 = [
     "wildlife deal beard romp alcohol space mild usual clothes union nuclear testify course research heat listen task location thank hospital slice smell failure fawn helpful priest ambition average recover lecture process dough stadium",
     "wildlife deal acrobat romp anxiety axis starting require metric flexible geology game drove editor edge screw helpful have huge holy making pitch unknown carve holiday numb glasses survive already tenant adapt goat fangs",
 ]
+# External entropy mocked as received from trezorlib.
+EXTERNAL_ENTROPY = b"zlutoucky kun upel divoke ody" * 2
 # fmt: on
+
+TEST_ADDRESS_N = tools.parse_path("m/44h/1h/0h/0/0")
+COMMON_FIXTURES_DIR = (
+    Path(__file__).parent.resolve().parent / "common" / "tests" / "fixtures"
+)
+
+
+def parametrize_using_common_fixtures(*paths):
+    fixtures = []
+    for path in paths:
+        fixtures.append(json.loads((COMMON_FIXTURES_DIR / path).read_text()))
+
+    tests = []
+    for fixture in fixtures:
+        for test in fixture["tests"]:
+            test_id = test.get("name")
+            if not test_id:
+                test_id = test.get("description")
+                if test_id is not None:
+                    test_id = test_id.lower().replace(" ", "_")
+
+            tests.append(
+                pytest.param(
+                    test["parameters"],
+                    test["result"],
+                    marks=pytest.mark.setup_client(
+                        passphrase=fixture["setup"]["passphrase"],
+                        mnemonic=fixture["setup"]["mnemonic"],
+                    ),
+                    id=test_id,
+                )
+            )
+
+    return pytest.mark.parametrize("parameters, result", tests)
 
 
 def generate_entropy(strength, internal_entropy, external_entropy):
@@ -88,16 +130,16 @@ def recovery_enter_shares(debug, shares, groups=False):
     yield
     debug.press_yes()
     # Input word number
-    code = yield
-    assert code == B.MnemonicWordCount
+    br = yield
+    assert br.code == B.MnemonicWordCount
     debug.input(str(word_count))
     # Homescreen - proceed to share entry
     yield
     debug.press_yes()
     # Enter shares
     for index, share in enumerate(shares):
-        code = yield
-        assert code == B.MnemonicInput
+        br = yield
+        assert br.code == B.MnemonicInput
         # Enter mnemonic words
         for word in share.split(" "):
             debug.input(word)
@@ -129,11 +171,11 @@ def click_through(debug, screens, code=None):
     for _ in range(screens):
         received = yield
         if code is not None:
-            assert received == code
+            assert received.code == code
         debug.press_yes()
 
 
-def read_and_confirm_mnemonic(debug, words):
+def read_and_confirm_mnemonic(debug, choose_wrong=False):
     """Read a given number of mnemonic words from Trezor T screen and correctly
     answer confirmation questions. Return the full mnemonic.
 
@@ -143,13 +185,13 @@ def read_and_confirm_mnemonic(debug, words):
     def input_flow():
         yield from click_through(client.debug, screens=3)
 
-        yield  # confirm mnemonic entry
-        mnemonic = read_and_confirm_mnemonic(client.debug, words=20)
+        mnemonic = yield from read_and_confirm_mnemonic(client.debug)
     """
     mnemonic = []
     while True:
+        br = yield
         mnemonic.extend(debug.read_reset_word().split())
-        if len(mnemonic) < words:
+        if br.page_number < br.pages:
             debug.swipe_up()
         else:
             # last page is confirmation
@@ -159,6 +201,25 @@ def read_and_confirm_mnemonic(debug, words):
     # check share
     for _ in range(3):
         index = debug.read_reset_word_pos()
-        debug.input(mnemonic[index])
+        if choose_wrong:
+            debug.input(mnemonic[(index + 1) % len(mnemonic)])
+            return None
+        else:
+            debug.input(mnemonic[index])
 
     return " ".join(mnemonic)
+
+
+def paging_responses(pages, code=None):
+    """Generate a sequence of ButtonRequests for paging through a specified number
+    of screens.
+    """
+    return [
+        ButtonRequest(code=code, page_number=i + 1, pages=pages) for i in range(pages)
+    ]
+
+
+def get_test_address(client):
+    """Fetch a testnet address on a fixed path. Useful to make a pin/passphrase
+    protected call, or to identify the root secret (seed+passphrase)"""
+    return btc.get_address(client, "Testnet", TEST_ADDRESS_N)

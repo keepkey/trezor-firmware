@@ -14,71 +14,21 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-import pytest
-
-from trezorlib import messages as proto
+from trezorlib import messages
 
 
-@pytest.mark.skip_t2
-class TestMsgPing:
-    @pytest.mark.setup_client(pin=True, passphrase=True)
-    def test_ping(self, client):
-        with client:
-            client.set_expected_responses([proto.Success()])
-            res = client.ping("random data")
-            assert res == "random data"
+def test_ping(client):
+    with client:
+        client.set_expected_responses([messages.Success])
+        res = client.ping("random data")
+        assert res == "random data"
 
-        with client:
-            client.set_expected_responses(
-                [
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ProtectCall),
-                    proto.Success(),
-                ]
-            )
-            res = client.ping("random data", button_protection=True)
-            assert res == "random data"
-
-        with client:
-            client.set_expected_responses([proto.PinMatrixRequest(), proto.Success()])
-            res = client.ping("random data", pin_protection=True)
-            assert res == "random data"
-
-        with client:
-            client.set_expected_responses([proto.PassphraseRequest(), proto.Success()])
-            res = client.ping("random data", passphrase_protection=True)
-            assert res == "random data"
-
-    @pytest.mark.setup_client(pin=True, passphrase=True)
-    def test_ping_caching(self, client):
-        with client:
-            client.set_expected_responses(
-                [
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ProtectCall),
-                    proto.PinMatrixRequest(),
-                    proto.PassphraseRequest(),
-                    proto.Success(),
-                ]
-            )
-            res = client.ping(
-                "random data",
-                button_protection=True,
-                pin_protection=True,
-                passphrase_protection=True,
-            )
-            assert res == "random data"
-
-        with client:
-            # pin and passphrase are cached
-            client.set_expected_responses(
-                [
-                    proto.ButtonRequest(code=proto.ButtonRequestType.ProtectCall),
-                    proto.Success(),
-                ]
-            )
-            res = client.ping(
-                "random data",
-                button_protection=True,
-                pin_protection=True,
-                passphrase_protection=True,
-            )
-            assert res == "random data"
+    with client:
+        client.set_expected_responses(
+            [
+                messages.ButtonRequest(code=messages.ButtonRequestType.ProtectCall),
+                messages.Success,
+            ]
+        )
+        res = client.ping("random data", button_protection=True)
+        assert res == "random data"

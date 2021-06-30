@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 import fnmatch
 import glob
-import io
 import json
 import logging
 import os
 import re
-import struct
 import sys
-import zlib
 from collections import defaultdict
 from hashlib import sha256
 
 import click
 
 import coin_info
-from coindef import CoinDef
 
 try:
     import termcolor
@@ -37,13 +33,11 @@ except ImportError:
     requests = None
 
 try:
-    import ed25519
     from PIL import Image
-    from trezorlib import protobuf
 
-    CAN_BUILD_DEFS = True
+    CAN_CHECK_ICONS = True
 except ImportError:
-    CAN_BUILD_DEFS = False
+    CAN_CHECK_ICONS = False
 
 
 # ======= Crayon colors ======
@@ -186,18 +180,6 @@ def check_eth(coins):
         chain_name_str = "colliding chain name " + crayon(None, key, bold=True) + ":"
         print_log(logging.ERROR, chain_name_str, bucket_str)
         check_passed = False
-    for coin in coins:
-        icon_file = coin["shortcut"].lower() + ".png"
-        try:
-            icon = Image.open(os.path.join(coin_info.DEFS_DIR, "ethereum", icon_file))
-        except Exception:
-            print(coin["key"], ": failed to open icon file", icon_file)
-            check_passed = False
-            continue
-
-        if icon.size != (128, 128) or icon.mode != "RGBA":
-            print(coin["key"], ": bad icon format (must be RGBA 128x128)")
-            check_passed = False
     return check_passed
 
 
@@ -331,7 +313,13 @@ def check_dups(buckets, print_at_level=logging.WARNING):
             continue
 
         supported = [coin for coin in bucket if not coin["unsupported"]]
-        nontokens = [coin for coin in bucket if not coin_info.is_token(coin)]
+        nontokens = [
+            coin
+            for coin in bucket
+            if not coin["unsupported"]
+            and coin.get("duplicate")
+            and not coin_info.is_token(coin)
+        ]  # we do not count override-marked coins as duplicates here
         cleared = not any(coin.get("duplicate") for coin in bucket)
 
         # string generation
@@ -347,7 +335,7 @@ def check_dups(buckets, print_at_level=logging.WARNING):
                 # some previous step has explicitly marked them as non-duplicate
                 level = logging.INFO
             else:
-                # at most 1 non-token - we tenatively allow token collisions
+                # at most 1 non-token - we tentatively allow token collisions
                 # when explicitly marked as supported
                 level = logging.WARNING
         else:
@@ -454,6 +442,8 @@ def check_segwit(coins):
             "bech32_prefix",
             "xpub_magic_segwit_native",
             "xpub_magic_segwit_p2sh",
+            "xpub_magic_multisig_segwit_native",
+            "xpub_magic_multisig_segwit_p2sh",
         ]
         if segwit:
             for field in segwit_fields:
@@ -470,7 +460,7 @@ def check_segwit(coins):
                     print_log(
                         logging.ERROR,
                         coin["name"],
-                        "segwit is True => %s should NOT be set" % field,
+                        "segwit is False => %s should NOT be set" % field,
                     )
                     return False
     return True
@@ -481,7 +471,7 @@ FIDO_KNOWN_KEYS = frozenset(
         "key",
         "u2f",
         "webauthn",
-        "label",
+        "name",
         "use_sign_count",
         "use_self_attestation",
         "no_icon",
@@ -493,11 +483,11 @@ FIDO_KNOWN_KEYS = frozenset(
 def check_fido(apps):
     check_passed = True
 
-    uf2_hashes = find_collisions((a for a in apps if "u2f" in a), "u2f")
-    for key, bucket in uf2_hashes.items():
-        bucket_str = ", ".join(app["key"] for app in bucket)
-        u2f_hash_str = "colliding U2F hash " + crayon(None, key, bold=True) + ":"
-        print_log(logging.ERROR, u2f_hash_str, bucket_str)
+    u2fs = find_collisions((u for a in apps if "u2f" in a for u in a["u2f"]), "app_id")
+    for key, bucket in u2fs.items():
+        bucket_str = ", ".join(u2f["label"] for u2f in bucket)
+        app_id_str = "colliding U2F app ID " + crayon(None, key, bold=True) + ":"
+        print_log(logging.ERROR, app_id_str, bucket_str)
         check_passed = False
 
     webauthn_domains = find_collisions((a for a in apps if "webauthn" in a), "webauthn")
@@ -507,10 +497,41 @@ def check_fido(apps):
         print_log(logging.ERROR, webauthn_str, bucket_str)
         check_passed = False
 
+    domain_hashes = {}
     for app in apps:
-        if "label" not in app:
-            print_log(logging.ERROR, app["key"], ": missing label")
+        if "webauthn" in app:
+            for domain in app["webauthn"]:
+                domain_hashes[sha256(domain.encode()).digest()] = domain
+    for app in apps:
+        if "u2f" in app:
+            for u2f in app["u2f"]:
+                domain = domain_hashes.get(bytes.fromhex(u2f["app_id"]))
+                if domain:
+                    print_log(
+                        logging.ERROR,
+                        "colliding WebAuthn domain "
+                        + crayon(None, domain, bold=True)
+                        + " and U2F app_id "
+                        + crayon(None, u2f["app_id"], bold=True)
+                        + " for "
+                        + u2f["label"],
+                    )
+                    check_passed = False
+
+    for app in apps:
+        if "name" not in app:
+            print_log(logging.ERROR, app["key"], ": missing name")
             check_passed = False
+
+        if "u2f" in app:
+            for u2f in app["u2f"]:
+                if "app_id" not in u2f:
+                    print_log(logging.ERROR, app["key"], ": missing app_id")
+                    check_passed = False
+
+                if "label" not in u2f:
+                    print_log(logging.ERROR, app["key"], ": missing label")
+                    check_passed = False
 
         if not app.get("u2f") and not app.get("webauthn"):
             print_log(logging.ERROR, app["key"], ": no U2F nor WebAuthn addresses")
@@ -550,59 +571,6 @@ def check_fido(apps):
             check_passed = False
 
     return check_passed
-
-
-# ====== coindefs generators ======
-
-
-def convert_icon(icon):
-    """Convert PIL icon to TOIF format"""
-    # TODO: move this to python-trezor at some point
-    DIM = 32
-    icon = icon.resize((DIM, DIM), Image.LANCZOS)
-    # remove alpha channel, replace with black
-    bg = Image.new("RGBA", icon.size, (0, 0, 0, 255))
-    icon = Image.alpha_composite(bg, icon)
-    # process pixels
-    pix = icon.load()
-    data = bytes()
-    for y in range(DIM):
-        for x in range(DIM):
-            r, g, b, _ = pix[x, y]
-            c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b & 0xF8) >> 3)
-            data += struct.pack(">H", c)
-    z = zlib.compressobj(level=9, wbits=10)
-    zdata = z.compress(data) + z.flush()
-    zdata = zdata[2:-4]  # strip header and checksum
-    return zdata
-
-
-def coindef_from_dict(coin):
-    proto = CoinDef()
-    for fname, _, fflags in CoinDef.FIELDS.values():
-        val = coin.get(fname)
-        if val is None and fflags & protobuf.FLAG_REPEATED:
-            val = []
-        elif fname == "signed_message_header":
-            val = val.encode()
-        elif fname == "hash_genesis_block":
-            val = bytes.fromhex(val)
-        setattr(proto, fname, val)
-
-    return proto
-
-
-def serialize_coindef(proto, icon):
-    proto.icon = icon
-    buf = io.BytesIO()
-    protobuf.dump_message(buf, proto)
-    return buf.getvalue()
-
-
-def sign(data):
-    h = sha256(data).digest()
-    sign_key = ed25519.SigningKey(b"A" * 32)
-    return sign_key.sign(h)
 
 
 # ====== click command handlers ======
@@ -662,7 +630,7 @@ def check(backend, icons, show_duplicates):
     if backend and requests is None:
         raise click.ClickException("You must install requests for backend check")
 
-    if icons and not CAN_BUILD_DEFS:
+    if icons and not CAN_CHECK_ICONS:
         raise click.ClickException("Missing requirements for icon check")
 
     defs, buckets = coin_info.coin_info_with_duplicates()
@@ -853,29 +821,6 @@ def dump(
     with outfile:
         indent = 4 if pretty else None
         json.dump(output, outfile, indent=indent, sort_keys=True)
-        outfile.write("\n")
-
-
-@cli.command()
-@click.option("-o", "--outfile", type=click.File(mode="w"), default="./coindefs.json")
-def coindefs(outfile):
-    """Generate signed coin definitions for python-trezor and others
-
-    This is currently unused but should enable us to add new coins without having to
-    update firmware.
-    """
-    coins = coin_info.coin_info().bitcoin
-    coindefs = {}
-    for coin in coins:
-        key = coin["key"]
-        icon = Image.open(coin["icon"])
-        ser = serialize_coindef(coindef_from_dict(coin), convert_icon(icon))
-        sig = sign(ser)
-        definition = (sig + ser).hex()
-        coindefs[key] = definition
-
-    with outfile:
-        json.dump(coindefs, outfile, indent=4, sort_keys=True)
         outfile.write("\n")
 
 

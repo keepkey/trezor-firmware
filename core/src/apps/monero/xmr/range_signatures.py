@@ -12,8 +12,12 @@ import gc
 
 from apps.monero.xmr import crypto
 
+if False:
+    from apps.monero.xmr.types import Sc25519
+    from apps.monero.xmr.serialize_messages.tx_rsig_bulletproof import Bulletproof
 
-def prove_range_bp_batch(amounts, masks):
+
+def prove_range_bp_batch(amounts: list[int], masks: list[Sc25519]) -> Bulletproof:
     """Calculates Bulletproof in batches"""
     from apps.monero.xmr import bulletproof as bp
 
@@ -25,7 +29,7 @@ def prove_range_bp_batch(amounts, masks):
     return bp_proof
 
 
-def verify_bp(bp_proof, amounts, masks):
+def verify_bp(bp_proof: Bulletproof, amounts: list[int], masks: list[Sc25519]) -> bool:
     """Verifies Bulletproof"""
     from apps.monero.xmr import bulletproof as bp
 

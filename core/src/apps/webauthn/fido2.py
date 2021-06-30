@@ -5,28 +5,37 @@ from micropython import const
 
 import storage
 import storage.resident_credentials
+from storage.fido2 import KEY_AGREEMENT_PRIVKEY, KEY_AGREEMENT_PUBKEY
 from trezor import config, io, log, loop, ui, utils, workflow
 from trezor.crypto import aes, der, hashlib, hmac, random
 from trezor.crypto.curve import nist256p1
-from trezor.ui.confirm import CONFIRMED, Confirm, ConfirmPageable, Pageable
-from trezor.ui.popup import Popup
-from trezor.ui.text import Text
-
-from apps.common import cbor
-from apps.webauthn.confirm import ConfirmContent, ConfirmInfo
-from apps.webauthn.credential import Credential, Fido2Credential, U2fCredential
-from apps.webauthn.resident_credentials import (
-    find_by_rp_id_hash,
-    store_resident_credential,
+from trezor.ui.components.tt.confirm import (
+    CONFIRMED,
+    Confirm,
+    ConfirmPageable,
+    Pageable,
 )
+from trezor.ui.components.tt.text import Text
+from trezor.ui.popup import Popup
 
-if __debug__:
-    from apps.debug import confirm_signal
+from apps.base import set_homescreen
+from apps.common import cbor
+
+from . import common
+from .confirm import ConfirmContent, ConfirmInfo
+from .credential import CRED_ID_MAX_LENGTH, Credential, Fido2Credential, U2fCredential
+from .resident_credentials import find_by_rp_id_hash, store_resident_credential
 
 if False:
-    from typing import Any, Coroutine, List, Optional, Tuple
+    from typing import (
+        Any,
+        Callable,
+        Coroutine,
+        Iterable,
+        Iterator,
+    )
 
-_CID_BROADCAST = const(0xFFFFFFFF)  # broadcast channel id
+_CID_BROADCAST = const(0xFFFF_FFFF)  # broadcast channel id
 
 # types of frame
 _TYPE_MASK = const(0x80)  # frame type mask
@@ -38,6 +47,7 @@ _HID_RPT_SIZE = const(64)
 _FRAME_INIT_SIZE = const(57)
 _FRAME_CONT_SIZE = const(59)
 _MAX_U2FHID_MSG_PAYLOAD_LEN = const(_FRAME_INIT_SIZE + 128 * _FRAME_CONT_SIZE)
+_CMD_INIT_NONCE_SIZE = const(8)
 
 # types of cmd
 _CMD_PING = const(0x81)  # echo data through local processor only
@@ -100,6 +110,8 @@ _GETINFO_RESP_EXTENSIONS = const(0x02)  # array of str, optional
 _GETINFO_RESP_AAGUID = const(0x03)  # bytes(16), required
 _GETINFO_RESP_OPTIONS = const(0x04)  # map, optional
 _GETINFO_RESP_PIN_PROTOCOLS = const(0x06)  # list of unsigned integers, optional
+_GETINFO_RESP_MAX_CRED_COUNT_IN_LIST = const(0x07)  # int, optional
+_GETINFO_RESP_MAX_CRED_ID_LEN = const(0x08)  # int, optional
 
 # CBOR ClientPin command parameter keys
 _CLIENTPIN_CMD_PIN_PROTOCOL = const(0x01)  # unsigned int, required
@@ -124,17 +136,7 @@ _U2F_CONFIRM_TIMEOUT_MS = const(
 )  # maximum U2F pollling interval, Chrome uses 200 ms
 _FIDO2_CONFIRM_TIMEOUT_MS = const(60 * 1000)
 _POPUP_TIMEOUT_MS = const(4 * 1000)
-
-# CBOR object signing and encryption algorithms and keys
-_COSE_ALG_KEY = const(3)
-_COSE_ALG_ES256 = const(-7)  # ECDSA P-256 with SHA-256
-_COSE_ALG_ECDH_ES_HKDF_256 = const(-25)  # Ephemeral-static ECDH with HKDF SHA-256
-_COSE_KEY_TYPE_KEY = const(1)
-_COSE_KEY_TYPE_EC2 = const(2)  # elliptic curve keys with x- and y-coordinate pair
-_COSE_CURVE_KEY = const(-1)  # elliptic curve identifier
-_COSE_CURVE_P256 = const(1)  # P-256 curve
-_COSE_X_COORD_KEY = const(-2)  # x coordinate of the public key
-_COSE_Y_COORD_KEY = const(-3)  # y coordinate of the public key
+_UV_CACHE_TIME_MS = const(3 * 60 * 1000)  # user verification cache time
 
 # hid error codes
 _ERR_NONE = const(0x00)  # no error
@@ -178,13 +180,12 @@ _U2FHID_IF_VERSION = const(2)  # interface version
 
 # register response
 _U2F_REGISTER_ID = const(0x05)  # version 2 registration identifier
-_U2F_ATT_PRIV_KEY = b"q&\xac+\xf6D\xdca\x86\xad\x83\xef\x1f\xcd\xf1*W\xb5\xcf\xa2\x00\x0b\x8a\xd0'\xe9V\xe8T\xc5\n\x8b"
-_U2F_ATT_CERT = b"0\x82\x01\x180\x81\xc0\x02\t\x00\xb1\xd9\x8fBdr\xd3,0\n\x06\x08*\x86H\xce=\x04\x03\x020\x151\x130\x11\x06\x03U\x04\x03\x0c\nTrezor U2F0\x1e\x17\r160429133153Z\x17\r260427133153Z0\x151\x130\x11\x06\x03U\x04\x03\x0c\nTrezor U2F0Y0\x13\x06\x07*\x86H\xce=\x02\x01\x06\x08*\x86H\xce=\x03\x01\x07\x03B\x00\x04\xd9\x18\xbd\xfa\x8aT\xac\x92\xe9\r\xa9\x1f\xcaz\xa2dT\xc0\xd1s61M\xde\x83\xa5K\x86\xb5\xdfN\xf0Re\x9a\x1do\xfc\xb7F\x7f\x1a\xcd\xdb\x8a3\x08\x0b^\xed\x91\x89\x13\xf4C\xa5&\x1b\xc7{h`o\xc10\n\x06\x08*\x86H\xce=\x04\x03\x02\x03G\x000D\x02 $\x1e\x81\xff\xd2\xe5\xe6\x156\x94\xc3U.\x8f\xeb\xd7\x1e\x895\x92\x1c\xb4\x83ACq\x1cv\xea\xee\xf3\x95\x02 _\x80\xeb\x10\xf2\\\xcc9\x8b<\xa8\xa9\xad\xa4\x02\x7f\x93\x13 w\xb7\xab\xcewFZ'\xf5=3\xa1\x1d"
+_FIDO_ATT_PRIV_KEY = b"q&\xac+\xf6D\xdca\x86\xad\x83\xef\x1f\xcd\xf1*W\xb5\xcf\xa2\x00\x0b\x8a\xd0'\xe9V\xe8T\xc5\n\x8b"
+_FIDO_ATT_CERT = b"0\x82\x01\xcd0\x82\x01s\xa0\x03\x02\x01\x02\x02\x04\x03E`\xc40\n\x06\x08*\x86H\xce=\x04\x03\x020.1,0*\x06\x03U\x04\x03\x0c#Trezor FIDO Root CA Serial 841513560 \x17\r200406100417Z\x18\x0f20500406100417Z0x1\x0b0\t\x06\x03U\x04\x06\x13\x02CZ1\x1c0\x1a\x06\x03U\x04\n\x0c\x13SatoshiLabs, s.r.o.1\"0 \x06\x03U\x04\x0b\x0c\x19Authenticator Attestation1'0%\x06\x03U\x04\x03\x0c\x1eTrezor FIDO EE Serial 548784040Y0\x13\x06\x07*\x86H\xce=\x02\x01\x06\x08*\x86H\xce=\x03\x01\x07\x03B\x00\x04\xd9\x18\xbd\xfa\x8aT\xac\x92\xe9\r\xa9\x1f\xcaz\xa2dT\xc0\xd1s61M\xde\x83\xa5K\x86\xb5\xdfN\xf0Re\x9a\x1do\xfc\xb7F\x7f\x1a\xcd\xdb\x8a3\x08\x0b^\xed\x91\x89\x13\xf4C\xa5&\x1b\xc7{h`o\xc1\xa33010!\x06\x0b+\x06\x01\x04\x01\x82\xe5\x1c\x01\x01\x04\x04\x12\x04\x10\xd6\xd0\xbd\xc3b\xee\xc4\xdb\xde\x8dzenJD\x870\x0c\x06\x03U\x1d\x13\x01\x01\xff\x04\x020\x000\n\x06\x08*\x86H\xce=\x04\x03\x02\x03H\x000E\x02 \x0b\xce\xc4R\xc3\n\x11'\xe5\xd5\xf5\xfc\xf5\xd6Wy\x11+\xe50\xad\x9d-TXJ\xbeE\x86\xda\x93\xc6\x02!\x00\xaf\xca=\xcf\xd8A\xb0\xadz\x9e$}\x0ff\xf4L,\x83\xf9T\xab\x95O\x896\xc15\x08\x7fX\xf1\x95"
 _BOGUS_APPID_CHROME = b"A" * 32
 _BOGUS_APPID_FIREFOX = b"\0" * 32
 _BOGUS_APPIDS = (_BOGUS_APPID_CHROME, _BOGUS_APPID_FIREFOX)
 _AAGUID = b"\xd6\xd0\xbd\xc3b\xee\xc4\xdb\xde\x8dzenJD\x87"  # First 16 bytes of SHA-256("TREZOR 2")
-_BOGUS_PRIV_KEY = b"\xAA" * 32
 
 # authentication control byte
 _AUTH_ENFORCE = const(0x03)  # enforce user presence and sign
@@ -211,19 +212,19 @@ _RESULT_DECLINE = const(2)  # User declined.
 _RESULT_CANCEL = const(3)  # Request was cancelled by _CMD_CANCEL.
 _RESULT_TIMEOUT = const(4)  # Request exceeded _FIDO2_CONFIRM_TIMEOUT_MS.
 
-# Generate the authenticatorKeyAgreementKey used for ECDH in authenticatorClientPIN getKeyAgreement.
-_KEY_AGREEMENT_PRIVKEY = nist256p1.generate_secret()
-_KEY_AGREEMENT_PUBKEY = nist256p1.publickey(_KEY_AGREEMENT_PRIVKEY, False)
-
 # FIDO2 configuration.
 _ALLOW_FIDO2 = True
 _ALLOW_RESIDENT_CREDENTIALS = True
+_ALLOW_WINK = False
 
 # The default attestation type to use in MakeCredential responses. If false, then basic attestation will be used by default.
 _DEFAULT_USE_SELF_ATTESTATION = True
 
 # The default value of the use_sign_count flag for newly created credentials.
 _DEFAULT_USE_SIGN_COUNT = True
+
+# The maximum number of credential IDs that can be supplied in the GetAssertion allow list.
+_MAX_CRED_COUNT_IN_LIST = const(10)
 
 # The CID of the last WINK command. Used to ensure that we do only one WINK at a time on any given CID.
 _last_wink_cid = 0
@@ -234,6 +235,7 @@ _last_good_auth_check_cid = 0
 
 class CborError(Exception):
     def __init__(self, code: int):
+        super().__init__()
         self.code = code
 
 
@@ -334,14 +336,14 @@ def resp_cmd_authenticate(siglen: int) -> dict:
     }
 
 
-def overlay_struct(buf: bytes, desc: dict) -> Any:
+def overlay_struct(buf: bytearray, desc: dict) -> Any:
     desc_size = uctypes.sizeof(desc, uctypes.BIG_ENDIAN)  # type: ignore
     if desc_size > len(buf):
         raise ValueError("desc is too big (%d > %d)" % (desc_size, len(buf)))
     return uctypes.struct(uctypes.addressof(buf), desc, uctypes.BIG_ENDIAN)
 
 
-def make_struct(desc: dict) -> Tuple[bytearray, Any]:
+def make_struct(desc: dict) -> tuple[bytearray, Any]:
     desc_size = uctypes.sizeof(desc, uctypes.BIG_ENDIAN)  # type: ignore
     buf = bytearray(desc_size)
     return buf, uctypes.struct(uctypes.addressof(buf), desc, uctypes.BIG_ENDIAN)
@@ -380,14 +382,14 @@ class Cmd:
         return Msg(self.cid, cla, ins, p1, p2, lc, data)
 
 
-async def read_cmd(iface: io.HID) -> Optional[Cmd]:
+async def read_cmd(iface: io.HID) -> Cmd | None:
     desc_init = frame_init()
     desc_cont = frame_cont()
     read = loop.wait(iface.iface_num() | io.POLL_READ)
 
     buf = await read
     while True:
-        ifrm = overlay_struct(buf, desc_init)
+        ifrm = overlay_struct(bytearray(buf), desc_init)
         bcnt = ifrm.bcnt
         data = ifrm.data
         datalen = len(data)
@@ -419,22 +421,55 @@ async def read_cmd(iface: io.HID) -> Optional[Cmd]:
             data = data[:bcnt]
 
         while datalen < bcnt:
-            buf = await loop.race(read, loop.sleep(_CTAP_HID_TIMEOUT_MS * 1000))
-            if not isinstance(buf, (bytes, bytearray)):
+            buf = await loop.race(read, loop.sleep(_CTAP_HID_TIMEOUT_MS))
+            if not isinstance(buf, bytes):
+                if __debug__:
+                    log.warning(__name__, "_ERR_MSG_TIMEOUT")
                 await send_cmd(cmd_error(ifrm.cid, _ERR_MSG_TIMEOUT), iface)
                 return None
 
-            cfrm = overlay_struct(buf, desc_cont)
+            cfrm = overlay_struct(bytearray(buf), desc_cont)
 
             if cfrm.seq == _CMD_INIT:
-                # _CMD_INIT frame, cancels current channel
-                break
+                if cfrm.cid == ifrm.cid:
+                    # _CMD_INIT command on current channel, abort current transaction.
+                    if __debug__:
+                        log.warning(
+                            __name__,
+                            "U2FHID: received CMD_INIT command during active tran, aborting",
+                        )
+                    break
+                else:
+                    # _CMD_INIT command on different channel, return synchronization response, but continue on current CID.
+                    if __debug__:
+                        log.info(
+                            __name__,
+                            "U2FHID: received CMD_INIT command for different CID",
+                        )
+                    cfrm = overlay_struct(bytearray(buf), desc_init)
+                    await send_cmd(
+                        cmd_init(
+                            Cmd(cfrm.cid, cfrm.cmd, bytes(cfrm.data[: cfrm.bcnt]))
+                        ),
+                        iface,
+                    )
+                    continue
 
             if cfrm.cid != ifrm.cid:
-                # cont frame for a different channel, reply with BUSY and abort
-                if __debug__:
-                    log.warning(__name__, "_ERR_CHANNEL_BUSY")
-                await send_cmd(cmd_error(cfrm.cid, _ERR_CHANNEL_BUSY), iface)
+                # Frame for a different channel, continue waiting for next frame on the active CID.
+                # For init frames reply with BUSY. Ignore continuation frames.
+                if cfrm.seq & _TYPE_MASK == _TYPE_INIT:
+                    if __debug__:
+                        log.warning(
+                            __name__,
+                            "U2FHID: received init frame for different CID, _ERR_CHANNEL_BUSY",
+                        )
+                    await send_cmd(cmd_error(cfrm.cid, _ERR_CHANNEL_BUSY), iface)
+                else:
+                    if __debug__:
+                        log.warning(
+                            __name__, "U2FHID: received cont frame for different CID"
+                        )
                 continue
 
             if cfrm.seq != seq:
@@ -448,7 +483,7 @@ async def read_cmd(iface: io.HID) -> Optional[Cmd]:
             datalen += utils.memcpy(data, datalen, cfrm.data, 0, bcnt - datalen)
             seq += 1
         else:
-            return Cmd(ifrm.cid, ifrm.cmd, data)
+            return Cmd(ifrm.cid, ifrm.cmd, bytes(data))
 
 
 async def send_cmd(cmd: Cmd, iface: io.HID) -> None:
@@ -477,7 +512,10 @@ async def send_cmd(cmd: Cmd, iface: io.HID) -> None:
         if copied < _FRAME_CONT_SIZE:
             frm.data[copied:] = bytearray(_FRAME_CONT_SIZE - copied)
         while True:
-            await write
+            ret = await loop.race(write, loop.sleep(_CTAP_HID_TIMEOUT_MS))
+            if ret is not None:
+                raise TimeoutError
+
             if iface.write(buf) > 0:
                 break
         seq += 1
@@ -523,7 +561,7 @@ async def handle_reports(iface: io.HID) -> None:
                 dialog_mgr.get_cid(),
                 _CID_BROADCAST,
             ):
-                resp = cmd_error(req.cid, _ERR_CHANNEL_BUSY)  # type: Optional[Cmd]
+                resp: Cmd | None = cmd_error(req.cid, _ERR_CHANNEL_BUSY)
             else:
                 resp = dispatch_cmd(req, dialog_mgr)
             if resp is not None:
@@ -542,12 +580,13 @@ class KeepaliveCallback:
 
 
 async def verify_user(keepalive_callback: KeepaliveCallback) -> bool:
-    from apps.common.request_pin import verify_user_pin, PinCancelled, PinInvalid
+    from trezor.wire import PinCancelled, PinInvalid
+    from apps.common.request_pin import verify_user_pin
     import trezor.pin
 
     try:
         trezor.pin.keepalive_callback = keepalive_callback
-        await verify_user_pin()
+        await verify_user_pin(cache_time_ms=_UV_CACHE_TIME_MS)
         ret = True
     except (PinCancelled, PinInvalid):
         ret = False
@@ -558,19 +597,11 @@ async def verify_user(keepalive_callback: KeepaliveCallback) -> bool:
 
 
 async def confirm(*args: Any, **kwargs: Any) -> bool:
-    dialog = Confirm(*args, **kwargs)
-    if __debug__:
-        return await loop.race(dialog, confirm_signal()) is CONFIRMED
-    else:
-        return await dialog is CONFIRMED
+    return await Confirm(*args, **kwargs) is CONFIRMED
 
 
 async def confirm_pageable(*args: Any, **kwargs: Any) -> bool:
-    dialog = ConfirmPageable(*args, **kwargs)
-    if __debug__:
-        return await loop.race(dialog, confirm_signal()) is CONFIRMED
-    else:
-        return await dialog is CONFIRMED
+    return await ConfirmPageable(*args, **kwargs) is CONFIRMED
 
 
 class State:
@@ -579,13 +610,14 @@ class State:
         self.iface = iface
         self.finished = False
 
-    def keepalive_status(self) -> Optional[int]:
-        return None
+    def keepalive_status(self) -> int:
+        # Run the keepalive loop to check for timeout, but do not send any keepalive messages.
+        return _KEEPALIVE_STATUS_NONE
 
     def timeout_ms(self) -> int:
         raise NotImplementedError
 
-    async def confirm_dialog(self) -> bool:
+    async def confirm_dialog(self) -> bool | "State":
         pass
 
     async def on_confirm(self) -> None:
@@ -611,17 +643,13 @@ class U2fState(State, ConfirmInfo):
         self._req_data = req_data
         self.load_icon(self._cred.rp_id_hash)
 
-    def keepalive_status(self) -> int:
-        # Run the keepalive loop to check for timeout, but do not send any keepalive messages.
-        return _KEEPALIVE_STATUS_NONE
-
     def timeout_ms(self) -> int:
         return _U2F_CONFIRM_TIMEOUT_MS
 
     def app_name(self) -> str:
         return self._cred.app_name()
 
-    def account_name(self) -> Optional[str]:
+    def account_name(self) -> str | None:
         return self._cred.account_name()
 
 
@@ -683,6 +711,25 @@ class U2fConfirmAuthenticate(U2fState):
         )
 
 
+class U2fUnlock(State):
+    def timeout_ms(self) -> int:
+        return _U2F_CONFIRM_TIMEOUT_MS
+
+    async def confirm_dialog(self) -> bool:
+        from trezor.wire import PinCancelled, PinInvalid
+        from apps.common.request_pin import verify_user_pin
+
+        try:
+            await verify_user_pin()
+            set_homescreen()
+        except (PinCancelled, PinInvalid):
+            return False
+        return True
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, U2fUnlock)
+
+
 class Fido2State(State):
     def __init__(self, cid: int, iface: io.HID) -> None:
         super().__init__(cid, iface)
@@ -712,6 +759,36 @@ class Fido2State(State):
         self.finished = True
 
 
+class Fido2Unlock(Fido2State):
+    def __init__(
+        self,
+        process_func: Callable[[Cmd, "DialogManager"], State | Cmd],
+        req: Cmd,
+        dialog_mgr: "DialogManager",
+    ) -> None:
+        super().__init__(req.cid, dialog_mgr.iface)
+        self.process_func = process_func
+        self.req = req
+        self.resp: Cmd | None = None
+        self.dialog_mgr = dialog_mgr
+
+    async def confirm_dialog(self) -> bool | "State":
+        if not await verify_user(KeepaliveCallback(self.cid, self.iface)):
+            return False
+
+        set_homescreen()
+        resp = self.process_func(self.req, self.dialog_mgr)
+        if isinstance(resp, State):
+            return resp
+        else:
+            self.resp = resp
+            return True
+
+    async def on_confirm(self) -> None:
+        if self.resp:
+            await send_cmd(self.resp, self.iface)
+
+
 class Fido2ConfirmMakeCredential(Fido2State, ConfirmInfo):
     def __init__(
         self,
@@ -736,7 +813,7 @@ class Fido2ConfirmMakeCredential(Fido2State, ConfirmInfo):
     def app_name(self) -> str:
         return self._cred.app_name()
 
-    def account_name(self) -> Optional[str]:
+    def account_name(self) -> str | None:
         return self._cred.account_name()
 
     async def confirm_dialog(self) -> bool:
@@ -787,8 +864,8 @@ class Fido2ConfirmGetAssertion(Fido2State, ConfirmInfo, Pageable):
         cid: int,
         iface: io.HID,
         client_data_hash: bytes,
-        creds: List[Credential],
-        hmac_secret: Optional[dict],
+        creds: list[Credential],
+        hmac_secret: dict | None,
         resident: bool,
         user_verification: bool,
     ) -> None:
@@ -808,7 +885,7 @@ class Fido2ConfirmGetAssertion(Fido2State, ConfirmInfo, Pageable):
     def app_name(self) -> str:
         return self._creds[self.page()].app_name()
 
-    def account_name(self) -> Optional[str]:
+    def account_name(self) -> str | None:
         return self._creds[self.page()].account_name()
 
     def page_count(self) -> int:
@@ -842,22 +919,25 @@ class Fido2ConfirmGetAssertion(Fido2State, ConfirmInfo, Pageable):
             cmd = cbor_error(self.cid, e.code)
         except KeyError:
             cmd = cbor_error(self.cid, _ERR_MISSING_PARAMETER)
-        except Exception:
-            cmd = cbor_error(self.cid, _ERR_OPERATION_DENIED)
+        except Exception as e:
+            # Firmware error.
+            if __debug__:
+                log.exception(__name__, e)
+            cmd = cbor_error(self.cid, _ERR_OTHER)
 
         await send_cmd(cmd, self.iface)
         self.finished = True
 
 
 class Fido2ConfirmNoPin(State):
-    def __init__(self, cid: int, iface: io.HID) -> None:
-        super().__init__(cid, iface)
-        self.finished = True
-
     def timeout_ms(self) -> int:
         return _FIDO2_CONFIRM_TIMEOUT_MS
 
     async def confirm_dialog(self) -> bool:
+        cmd = cbor_error(self.cid, _ERR_UNSUPPORTED_OPTION)
+        await send_cmd(cmd, self.iface)
+        self.finished = True
+
         text = Text("FIDO2 Verify User", ui.ICON_WRONG, ui.RED)
         text.bold("Unable to verify user.")
         text.br_half()
@@ -910,11 +990,14 @@ class DialogManager:
         self._clear()
 
     def _clear(self) -> None:
-        self.state = None  # type: Optional[State]
+        self.state: State | None = None
         self.deadline = 0
         self.result = _RESULT_NONE
-        self.workflow = None  # type: Optional[Coroutine]
-        self.keepalive = None  # type: Optional[Coroutine]
+        self.workflow: loop.spawn | None = None
+        self.keepalive: Coroutine | None = None
+
+    def _workflow_is_running(self) -> bool:
+        return self.workflow is not None and not self.workflow.finished
 
     def reset_timeout(self) -> None:
         if self.state is not None:
@@ -922,7 +1005,7 @@ class DialogManager:
 
     def reset(self) -> None:
         if self.workflow is not None:
-            loop.close(self.workflow)
+            self.workflow.close()
         if self.keepalive is not None:
             loop.close(self.keepalive)
         self._clear()
@@ -936,7 +1019,7 @@ class DialogManager:
         if utime.ticks_ms() >= self.deadline:
             self.reset()
 
-        if self.workflow is None:
+        if not self._workflow_is_running():
             return bool(workflow.tasks)
 
         if self.state is None or self.state.finished:
@@ -945,37 +1028,31 @@ class DialogManager:
 
         return True
 
-    def compare(self, state: State) -> bool:
-        if self.state != state:
-            return False
-        if utime.ticks_ms() >= self.deadline:
-            self.reset()
-            return False
-        return True
-
     def set_state(self, state: State) -> bool:
+        if self.state == state and utime.ticks_ms() < self.deadline:
+            self.reset_timeout()
+            return True
+
         if self.is_busy():
             return False
 
         self.state = state
         self.reset_timeout()
         self.result = _RESULT_NONE
-        if state.keepalive_status() is not None:
-            self.keepalive = self.keepalive_loop()
-            loop.schedule(self.keepalive)
-        self.workflow = self.dialog_workflow()
-        loop.schedule(self.workflow)
+        self.keepalive = self.keepalive_loop()  # TODO: use loop.spawn here
+        loop.schedule(self.keepalive)
+        self.workflow = workflow.spawn(self.dialog_workflow())
         return True
 
     async def keepalive_loop(self) -> None:
         try:
-            if not isinstance(self.state, (U2fState, Fido2State)):
+            if not self.state:
                 return
             while utime.ticks_ms() < self.deadline:
                 if self.state.keepalive_status() != _KEEPALIVE_STATUS_NONE:
                     cmd = cmd_keepalive(self.state.cid, self.state.keepalive_status())
                     await send_cmd(cmd, self.iface)
-                await loop.sleep(_KEEPALIVE_INTERVAL_MS * 1000)
+                await loop.sleep(_KEEPALIVE_INTERVAL_MS)
         finally:
             self.keepalive = None
 
@@ -983,34 +1060,34 @@ class DialogManager:
         self.reset()
 
     async def dialog_workflow(self) -> None:
-        if self.workflow is None or self.state is None:
+        if self.state is None:
             return
 
         try:
-            workflow.on_start(self.workflow)
-            try:
-                if await self.state.confirm_dialog():
+            while self.result is _RESULT_NONE:
+                result = await self.state.confirm_dialog()
+                if isinstance(result, State):
+                    self.state = result
+                    self.reset_timeout()
+                elif result is True:
                     self.result = _RESULT_CONFIRM
                 else:
                     self.result = _RESULT_DECLINE
-            finally:
-                if self.keepalive is not None:
-                    loop.close(self.keepalive)
-
-                if self.result == _RESULT_CONFIRM:
-                    await self.state.on_confirm()
-                elif self.result == _RESULT_CANCEL:
-                    await self.state.on_cancel()
-                elif self.result == _RESULT_TIMEOUT:
-                    await self.state.on_timeout()
-                else:
-                    await self.state.on_decline()
         finally:
-            workflow.on_close(self.workflow)
-            self.workflow = None
+            if self.keepalive is not None:
+                loop.close(self.keepalive)
+
+            if self.result == _RESULT_CONFIRM:
+                await self.state.on_confirm()
+            elif self.result == _RESULT_CANCEL:
+                await self.state.on_cancel()
+            elif self.result == _RESULT_TIMEOUT:
+                await self.state.on_timeout()
+            else:
+                await self.state.on_decline()
 
 
-def dispatch_cmd(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
+def dispatch_cmd(req: Cmd, dialog_mgr: DialogManager) -> Cmd | None:
     if req.cmd == _CMD_MSG:
         try:
             m = req.to_msg()
@@ -1052,7 +1129,7 @@ def dispatch_cmd(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
         if __debug__:
             log.debug(__name__, "_CMD_PING")
         return req
-    elif req.cmd == _CMD_WINK:
+    elif req.cmd == _CMD_WINK and _ALLOW_WINK:
         if __debug__:
             log.debug(__name__, "_CMD_WINK")
         return cmd_wink(req)
@@ -1102,10 +1179,13 @@ def dispatch_cmd(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
 
 def cmd_init(req: Cmd) -> Cmd:
     if req.cid == _CID_BROADCAST:
-        # uint32_t except 0 and 0xffffffff
-        resp_cid = random.uniform(0xFFFFFFFE) + 1
+        # uint32_t except 0 and 0xffff_ffff
+        resp_cid = random.uniform(0xFFFF_FFFE) + 1
     else:
         resp_cid = req.cid
+
+    if len(req.data) != _CMD_INIT_NONCE_SIZE:
+        return cmd_error(req.cid, _ERR_INVALID_LEN)
 
     buf, resp = make_struct(resp_cmd_init())
     utils.memcpy(resp.nonce, 0, req.data, 0, len(req.data))
@@ -1114,9 +1194,9 @@ def cmd_init(req: Cmd) -> Cmd:
     resp.versionMajor = 2
     resp.versionMinor = 0
     resp.versionBuild = 0
-    resp.capFlags = _CAPFLAG_WINK | _CAPFLAG_CBOR
+    resp.capFlags = (_CAPFLAG_WINK * _ALLOW_WINK) | _CAPFLAG_CBOR
 
-    return Cmd(req.cid, req.cmd, buf)
+    return Cmd(req.cid, req.cmd, bytes(buf))
 
 
 def cmd_wink(req: Cmd) -> Cmd:
@@ -1128,10 +1208,17 @@ def cmd_wink(req: Cmd) -> Cmd:
 
 
 def msg_register(req: Msg, dialog_mgr: DialogManager) -> Cmd:
-    if not storage.is_initialized():
+    if not config.is_unlocked():
+        new_state: State = U2fUnlock(req.cid, dialog_mgr.iface)
+        dialog_mgr.set_state(new_state)
+        return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
+
+    if not storage.device.is_initialized():
         if __debug__:
             log.warning(__name__, "not initialized")
-        return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
+        # There is no standard way to decline a U2F request, but responding with ERR_CHANNEL_BUSY
+        # doesn't seem to violate the protocol and at least stops Chrome from polling.
+        return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
 
     # check length of input data
     if len(req.data) != 64:
@@ -1142,15 +1229,13 @@ def msg_register(req: Msg, dialog_mgr: DialogManager) -> Cmd:
     # parse challenge and rp_id_hash
     chal = req.data[:32]
     cred = U2fCredential()
-    cred.rp_id_hash = bytes(req.data[32:])
+    cred.rp_id_hash = req.data[32:]
     cred.generate_key_handle()
 
     # check equality with last request
     new_state = U2fConfirmRegister(req.cid, dialog_mgr.iface, req.data, cred)
-    if not dialog_mgr.compare(new_state):
-        if not dialog_mgr.set_state(new_state):
-            return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
-    dialog_mgr.reset_timeout()
+    if not dialog_mgr.set_state(new_state):
+        return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
 
     # wait for a button or continue
     if dialog_mgr.result == _RESULT_NONE:
@@ -1175,41 +1260,45 @@ def msg_register(req: Msg, dialog_mgr: DialogManager) -> Cmd:
     return Cmd(req.cid, _CMD_MSG, buf)
 
 
-def msg_register_sign(challenge: bytes, cred: U2fCredential) -> bytes:
-    pubkey = nist256p1.publickey(cred.private_key(), False)
-
-    # hash the request data together with keyhandle and pubkey
+def basic_attestation_sign(data: Iterable[bytes]) -> bytes:
     dig = hashlib.sha256()
-    dig.update(b"\x00")  # uint8_t reserved;
-    dig.update(cred.rp_id_hash)  # uint8_t appId[32];
-    dig.update(challenge)  # uint8_t chal[32];
-    dig.update(cred.id)  # uint8_t keyHandle[64];
-    dig.update(pubkey)  # uint8_t pubKey[65];
+    for segment in data:
+        dig.update(segment)
+    sig = nist256p1.sign(_FIDO_ATT_PRIV_KEY, dig.digest(), False)
+    return der.encode_seq((sig[1:33], sig[33:]))
 
-    # sign the digest and convert to der
-    sig = nist256p1.sign(_U2F_ATT_PRIV_KEY, dig.digest(), False)
-    sig = der.encode_seq((sig[1:33], sig[33:]))
+
+def msg_register_sign(challenge: bytes, cred: U2fCredential) -> bytes:
+    pubkey = cred.public_key()
+
+    sig = basic_attestation_sign((b"\x00", cred.rp_id_hash, challenge, cred.id, pubkey))
 
     # pack to a response
     buf, resp = make_struct(
-        resp_cmd_register(len(cred.id), len(_U2F_ATT_CERT), len(sig))
+        resp_cmd_register(len(cred.id), len(_FIDO_ATT_CERT), len(sig))
     )
     resp.registerId = _U2F_REGISTER_ID
     utils.memcpy(resp.pubKey, 0, pubkey, 0, len(pubkey))
     resp.keyHandleLen = len(cred.id)
     utils.memcpy(resp.keyHandle, 0, cred.id, 0, len(cred.id))
-    utils.memcpy(resp.cert, 0, _U2F_ATT_CERT, 0, len(_U2F_ATT_CERT))
+    utils.memcpy(resp.cert, 0, _FIDO_ATT_CERT, 0, len(_FIDO_ATT_CERT))
     utils.memcpy(resp.sig, 0, sig, 0, len(sig))
     resp.status = _SW_NO_ERROR
 
-    return buf
+    return bytes(buf)
 
 
 def msg_authenticate(req: Msg, dialog_mgr: DialogManager) -> Cmd:
-    if not storage.is_initialized():
+    if not config.is_unlocked():
+        new_state: State = U2fUnlock(req.cid, dialog_mgr.iface)
+        dialog_mgr.set_state(new_state)
+        return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
+
+    if not storage.device.is_initialized():
         if __debug__:
             log.warning(__name__, "not initialized")
-        return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
+        # Device is not registered with the RP.
+        return msg_error(req.cid, _SW_WRONG_DATA)
 
     # we need at least keyHandleLen
     if len(req.data) <= _REQ_CMD_AUTHENTICATE_KHLEN:
@@ -1219,12 +1308,15 @@ def msg_authenticate(req: Msg, dialog_mgr: DialogManager) -> Cmd:
 
     # check keyHandleLen
     khlen = req.data[_REQ_CMD_AUTHENTICATE_KHLEN]
-    auth = overlay_struct(req.data, req_cmd_authenticate(khlen))
+    auth = overlay_struct(bytearray(req.data), req_cmd_authenticate(khlen))
+    challenge = bytes(auth.chal)
+    rp_id_hash = bytes(auth.appId)
+    key_handle = bytes(auth.keyHandle)
 
     try:
-        cred = Credential.from_bytes(auth.keyHandle, bytes(auth.appId))
+        cred = Credential.from_bytes(key_handle, rp_id_hash)
     except Exception:
-        # specific error logged in msg_authenticate_genkey
+        # specific error logged in _node_from_key_handle
         return msg_error(req.cid, _SW_WRONG_DATA)
 
     # if _AUTH_CHECK_ONLY is requested, return, because keyhandle has been checked already
@@ -1243,10 +1335,8 @@ def msg_authenticate(req: Msg, dialog_mgr: DialogManager) -> Cmd:
 
     # check equality with last request
     new_state = U2fConfirmAuthenticate(req.cid, dialog_mgr.iface, req.data, cred)
-    if not dialog_mgr.compare(new_state):
-        if not dialog_mgr.set_state(new_state):
-            return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
-    dialog_mgr.reset_timeout()
+    if not dialog_mgr.set_state(new_state):
+        return msg_error(req.cid, _SW_CONDITIONS_NOT_SATISFIED)
 
     # wait for a button or continue
     if dialog_mgr.result == _RESULT_NONE:
@@ -1264,7 +1354,7 @@ def msg_authenticate(req: Msg, dialog_mgr: DialogManager) -> Cmd:
     # sign the authentication challenge and return
     if __debug__:
         log.info(__name__, "signing authentication")
-    buf = msg_authenticate_sign(auth.chal, auth.appId, cred)
+    buf = msg_authenticate_sign(challenge, rp_id_hash, cred)
 
     dialog_mgr.reset()
 
@@ -1280,16 +1370,8 @@ def msg_authenticate_sign(
     ctr = cred.next_signature_counter()
     ctrbuf = ustruct.pack(">L", ctr)
 
-    # hash input data together with counter
-    dig = hashlib.sha256()
-    dig.update(rp_id_hash)  # uint8_t appId[32];
-    dig.update(flags)  # uint8_t flags;
-    dig.update(ctrbuf)  # uint8_t ctr[4];
-    dig.update(challenge)  # uint8_t chal[32];
-
-    # sign the digest and convert to der
-    sig = nist256p1.sign(cred.private_key(), dig.digest(), False)
-    sig = der.encode_seq((sig[1:33], sig[33:]))
+    # sign the input data together with counter
+    sig = cred.sign((rp_id_hash, flags, ctrbuf, challenge))
 
     # pack to a response
     buf, resp = make_struct(resp_cmd_authenticate(len(sig)))
@@ -1298,7 +1380,7 @@ def msg_authenticate_sign(
     utils.memcpy(resp.sig, 0, sig, 0, len(sig))
     resp.status = _SW_NO_ERROR
 
-    return buf
+    return bytes(buf)
 
 
 def msg_version(req: Msg) -> Cmd:
@@ -1320,9 +1402,8 @@ def cbor_error(cid: int, code: int) -> Cmd:
 
 
 def credentials_from_descriptor_list(
-    descriptor_list: List[dict], rp_id_hash: bytes
-) -> List[Credential]:
-    cred_list = []
+    descriptor_list: list[dict], rp_id_hash: bytes
+) -> Iterator[Credential]:
     for credential_descriptor in descriptor_list:
         credential_type = credential_descriptor["type"]
         if not isinstance(credential_type, str):
@@ -1331,18 +1412,34 @@ def credentials_from_descriptor_list(
             continue
 
         credential_id = credential_descriptor["id"]
-        if not isinstance(credential_id, (bytes, bytearray)):
+        if not isinstance(credential_id, bytes):
             raise TypeError
         try:
             cred = Credential.from_bytes(credential_id, rp_id_hash)
-            cred_list.append(cred)
         except Exception:
-            pass
+            continue
 
+        yield cred
+
+
+def distinguishable_cred_list(credentials: Iterable[Credential]) -> list[Credential]:
+    """Reduces the input to a list of credentials which can be distinguished by
+    the user. It is assumed that all input credentials share the same RP ID."""
+    cred_list: list[Credential] = []
+    for cred in credentials:
+        for i, prev_cred in enumerate(cred_list):
+            if prev_cred.account_name() == cred.account_name():
+                # Among indistinguishable FIDO2 credentials prefer the newest.
+                # Among U2F credentials prefer the first in the input.
+                if isinstance(cred, Fido2Credential) and cred < prev_cred:
+                    cred_list[i] = cred
+                break
+        else:
+            cred_list.append(cred)
     return cred_list
 
 
-def algorithms_from_pub_key_cred_params(pub_key_cred_params: List[dict]) -> List[int]:
+def algorithms_from_pub_key_cred_params(pub_key_cred_params: list[dict]) -> list[int]:
     alg_list = []
     for pkcp in pub_key_cred_params:
         pub_key_cred_type = pkcp["type"]
@@ -1358,13 +1455,28 @@ def algorithms_from_pub_key_cred_params(pub_key_cred_params: List[dict]) -> List
     return alg_list
 
 
-def cbor_make_credential(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
-    from apps.webauthn import knownapps
+def cbor_make_credential(req: Cmd, dialog_mgr: DialogManager) -> Cmd | None:
+    if config.is_unlocked():
+        resp = cbor_make_credential_process(req, dialog_mgr)
+    else:
+        resp = Fido2Unlock(cbor_make_credential_process, req, dialog_mgr)
 
-    if not storage.is_initialized():
+    if isinstance(resp, State):
+        if dialog_mgr.set_state(resp):
+            return None
+        else:
+            return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
+    else:
+        return resp
+
+
+def cbor_make_credential_process(req: Cmd, dialog_mgr: DialogManager) -> State | Cmd:
+    from . import knownapps
+
+    if not storage.device.is_initialized():
         if __debug__:
             log.warning(__name__, "not initialized")
-        return cbor_error(req.cid, _ERR_OPERATION_DENIED)
+        return cbor_error(req.cid, _ERR_OTHER)
 
     try:
         param = cbor.decode(req.data[1:])
@@ -1381,22 +1493,27 @@ def cbor_make_credential(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
         cred.user_id = user["id"]
         cred.user_name = user.get("name", None)
         cred.user_display_name = user.get("displayName", None)
+        cred.truncate_names()
 
         # Check if any of the credential descriptors in the exclude list belong to this authenticator.
         exclude_list = param.get(_MAKECRED_CMD_EXCLUDE_LIST, [])
-        if credentials_from_descriptor_list(exclude_list, rp_id_hash):
+        excluded_creds = credentials_from_descriptor_list(exclude_list, rp_id_hash)
+        if not utils.is_empty_iterator(excluded_creds):
             # This authenticator is already registered.
-            if not dialog_mgr.set_state(
-                Fido2ConfirmExcluded(req.cid, dialog_mgr.iface, cred)
-            ):
-                return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
-            return None
+            return Fido2ConfirmExcluded(req.cid, dialog_mgr.iface, cred)
 
-        # Check that the relying party supports ECDSA P-256 with SHA-256. We don't support any other algorithms.
+        # Check that the relying party supports ECDSA with SHA-256 or EdDSA. We don't support any other algorithms.
         pub_key_cred_params = param[_MAKECRED_CMD_PUB_KEY_CRED_PARAMS]
-        if _COSE_ALG_ES256 not in algorithms_from_pub_key_cred_params(
-            pub_key_cred_params
-        ):
+        for alg in algorithms_from_pub_key_cred_params(pub_key_cred_params):
+            if alg == common.COSE_ALG_ES256:
+                cred.algorithm = alg
+                cred.curve = common.COSE_CURVE_P256
+                break
+            elif alg == common.COSE_ALG_EDDSA:
+                cred.algorithm = alg
+                cred.curve = common.COSE_CURVE_ED25519
+                break
+        else:
             return cbor_error(req.cid, _ERR_UNSUPPORTED_ALGORITHM)
 
         # Get options.
@@ -1428,7 +1545,7 @@ def cbor_make_credential(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
         not cred.check_data_types()
         or not isinstance(user.get("icon", ""), str)
         or not isinstance(rp.get("icon", ""), str)
-        or not isinstance(client_data_hash, (bytes, bytearray))
+        or not isinstance(client_data_hash, bytes)
         or not isinstance(resident_key, bool)
         or not isinstance(user_verification, bool)
     ):
@@ -1443,61 +1560,43 @@ def cbor_make_credential(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
 
     if user_verification and not config.has_pin():
         # User verification requested, but PIN is not enabled.
-        state_set = dialog_mgr.set_state(Fido2ConfirmNoPin(req.cid, dialog_mgr.iface))
-        if state_set:
-            # We should return _ERR_UNSUPPORTED_OPTION, but since we claim in GetInfo that the PIN
-            # is set even when it's not, it makes more sense to return _ERR_OPERATION_DENIED.
-            return cbor_error(req.cid, _ERR_OPERATION_DENIED)
-        else:
-            return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
+        return Fido2ConfirmNoPin(req.cid, dialog_mgr.iface)
 
     # Check that the pinAuth parameter is absent. Client PIN is not supported.
     if _MAKECRED_CMD_PIN_AUTH in param:
         return cbor_error(req.cid, _ERR_PIN_AUTH_INVALID)
 
     # Ask user to confirm registration.
-    state_set = dialog_mgr.set_state(
-        Fido2ConfirmMakeCredential(
-            req.cid,
-            dialog_mgr.iface,
-            client_data_hash,
-            cred,
-            resident_key,
-            user_verification,
-        )
+    return Fido2ConfirmMakeCredential(
+        req.cid,
+        dialog_mgr.iface,
+        client_data_hash,
+        cred,
+        resident_key,
+        user_verification,
     )
 
-    if not state_set:
-        return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
 
-    return None
+def use_self_attestation(rp_id_hash: bytes) -> bool:
+    from . import knownapps
+
+    app = knownapps.by_rp_id_hash(rp_id_hash)
+    if app is not None and app.use_self_attestation is not None:
+        return app.use_self_attestation
+    else:
+        return _DEFAULT_USE_SELF_ATTESTATION
 
 
 def cbor_make_credential_sign(
     client_data_hash: bytes, cred: Fido2Credential, user_verification: bool
 ) -> bytes:
-    from apps.webauthn import knownapps
-
-    privkey = cred.private_key()
-    pubkey = nist256p1.publickey(privkey, False)
-
     flags = _AUTH_FLAG_UP | _AUTH_FLAG_AT
     if user_verification:
         flags |= _AUTH_FLAG_UV
 
     # Encode the authenticator data (Credential ID, its public key and extensions).
-    credential_pub_key = cbor.encode(
-        {
-            _COSE_ALG_KEY: _COSE_ALG_ES256,
-            _COSE_KEY_TYPE_KEY: _COSE_KEY_TYPE_EC2,
-            _COSE_CURVE_KEY: _COSE_CURVE_P256,
-            _COSE_X_COORD_KEY: pubkey[1:33],
-            _COSE_Y_COORD_KEY: pubkey[33:],
-        }
-    )
-
     att_cred_data = (
-        _AAGUID + len(cred.id).to_bytes(2, "big") + cred.id + credential_pub_key
+        _AAGUID + len(cred.id).to_bytes(2, "big") + cred.id + cred.public_key()
     )
 
     extensions = b""
@@ -1515,27 +1614,18 @@ def cbor_make_credential_sign(
         + extensions
     )
 
-    app = knownapps.by_rp_id_hash(cred.rp_id_hash)
-    if app is not None and app.use_self_attestation is not None:
-        use_self_attestation = app.use_self_attestation
+    if use_self_attestation(cred.rp_id_hash):
+        sig = cred.sign((authenticator_data, client_data_hash))
+        attestation_statement = {"alg": cred.algorithm, "sig": sig}
     else:
-        use_self_attestation = _DEFAULT_USE_SELF_ATTESTATION
-
-    # Compute the attestation signature of the authenticator data.
-    if not use_self_attestation:
-        privkey = _U2F_ATT_PRIV_KEY
-
-    dig = hashlib.sha256()
-    dig.update(authenticator_data)
-    dig.update(client_data_hash)
-    sig = nist256p1.sign(privkey, dig.digest(), False)
-    sig = der.encode_seq((sig[1:33], sig[33:]))
+        sig = basic_attestation_sign((authenticator_data, client_data_hash))
+        attestation_statement = {
+            "alg": common.COSE_ALG_ES256,
+            "sig": sig,
+            "x5c": [_FIDO_ATT_CERT],
+        }
 
     # Encode the authenticatorMakeCredential response data.
-    attestation_statement = {"alg": _COSE_ALG_ES256, "sig": sig}
-    if not use_self_attestation:
-        attestation_statement["x5c"] = [_U2F_ATT_CERT]
-
     return cbor.encode(
         {
             _MAKECRED_RESP_FMT: "packed",
@@ -1545,11 +1635,26 @@ def cbor_make_credential_sign(
     )
 
 
-def cbor_get_assertion(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
-    if not storage.is_initialized():
+def cbor_get_assertion(req: Cmd, dialog_mgr: DialogManager) -> Cmd | None:
+    if config.is_unlocked():
+        resp = cbor_get_assertion_process(req, dialog_mgr)
+    else:
+        resp = Fido2Unlock(cbor_get_assertion_process, req, dialog_mgr)
+
+    if isinstance(resp, State):
+        if dialog_mgr.set_state(resp):
+            return None
+        else:
+            return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
+    else:
+        return resp
+
+
+def cbor_get_assertion_process(req: Cmd, dialog_mgr: DialogManager) -> State | Cmd:
+    if not storage.device.is_initialized():
         if __debug__:
             log.warning(__name__, "not initialized")
-        return cbor_error(req.cid, _ERR_OPERATION_DENIED)
+        return cbor_error(req.cid, _ERR_OTHER)
 
     try:
         param = cbor.decode(req.data[1:])
@@ -1559,7 +1664,8 @@ def cbor_get_assertion(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
         allow_list = param.get(_GETASSERT_CMD_ALLOW_LIST, [])
         if allow_list:
             # Get all credentials from the allow list that belong to this authenticator.
-            cred_list = credentials_from_descriptor_list(allow_list, rp_id_hash)
+            allowed_creds = credentials_from_descriptor_list(allow_list, rp_id_hash)
+            cred_list = distinguishable_cred_list(allowed_creds)
             for cred in cred_list:
                 if cred.rp_id is None:
                     cred.rp_id = rp_id
@@ -1598,7 +1704,7 @@ def cbor_get_assertion(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
     # Check data types.
     if (
         not isinstance(hmac_secret, (dict, type(None)))
-        or not isinstance(client_data_hash, (bytes, bytearray))
+        or not isinstance(client_data_hash, bytes)
         or not isinstance(user_presence, bool)
         or not isinstance(user_verification, bool)
     ):
@@ -1610,20 +1716,12 @@ def cbor_get_assertion(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
 
     if user_verification and not config.has_pin():
         # User verification requested, but PIN is not enabled.
-        state_set = dialog_mgr.set_state(Fido2ConfirmNoPin(req.cid, dialog_mgr.iface))
-        if state_set:
-            # We should return _ERR_UNSUPPORTED_OPTION, but since we claim in GetInfo that the PIN
-            # is set even when it's not, it makes more sense to return _ERR_OPERATION_DENIED.
-            return cbor_error(req.cid, _ERR_OPERATION_DENIED)
-        else:
-            return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
+        return Fido2ConfirmNoPin(req.cid, dialog_mgr.iface)
 
     if not cred_list:
         # No credentials. This authenticator is not registered.
         if user_presence:
-            state_set = dialog_mgr.set_state(
-                Fido2ConfirmNoCredentials(req.cid, dialog_mgr.iface, rp_id)
-            )
+            return Fido2ConfirmNoCredentials(req.cid, dialog_mgr.iface, rp_id)
         else:
             return cbor_error(req.cid, _ERR_NO_CREDENTIALS)
     elif not user_presence and not user_verification:
@@ -1639,42 +1737,36 @@ def cbor_get_assertion(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
                 user_verification,
             )
             return Cmd(req.cid, _CMD_CBOR, bytes([_ERR_NONE]) + response_data)
-        except Exception:
-            return cbor_error(req.cid, _ERR_OPERATION_DENIED)
+        except Exception as e:
+            # Firmware error.
+            if __debug__:
+                log.exception(__name__, e)
+            return cbor_error(req.cid, _ERR_OTHER)
     else:
         # Ask user to confirm one of the credentials.
-        state_set = dialog_mgr.set_state(
-            Fido2ConfirmGetAssertion(
-                req.cid,
-                dialog_mgr.iface,
-                client_data_hash,
-                cred_list,
-                hmac_secret,
-                resident,
-                user_verification,
-            )
+        return Fido2ConfirmGetAssertion(
+            req.cid,
+            dialog_mgr.iface,
+            client_data_hash,
+            cred_list,
+            hmac_secret,
+            resident,
+            user_verification,
         )
 
-    if not state_set:
-        return cmd_error(req.cid, _ERR_CHANNEL_BUSY)
 
-    return None
-
-
-def cbor_get_assertion_hmac_secret(
-    cred: Credential, hmac_secret: dict
-) -> Optional[bytes]:
+def cbor_get_assertion_hmac_secret(cred: Credential, hmac_secret: dict) -> bytes | None:
     key_agreement = hmac_secret[1]  # The public key of platform key agreement key.
-    # NOTE: We should check the key_agreement[_COSE_ALG_KEY] here, but to avoid compatibility issues we don't,
+    # NOTE: We should check the key_agreement[COSE_KEY_ALG] here, but to avoid compatibility issues we don't,
     # because there is currently no valid value which describes the actual key agreement algorithm.
     if (
-        key_agreement[_COSE_KEY_TYPE_KEY] != _COSE_KEY_TYPE_EC2
-        or key_agreement[_COSE_CURVE_KEY] != _COSE_CURVE_P256
+        key_agreement[common.COSE_KEY_KTY] != common.COSE_KEYTYPE_EC2
+        or key_agreement[common.COSE_KEY_CRV] != common.COSE_CURVE_P256
     ):
         return None
 
-    x = key_agreement[_COSE_X_COORD_KEY]
-    y = key_agreement[_COSE_Y_COORD_KEY]
+    x = key_agreement[common.COSE_KEY_X]
+    y = key_agreement[common.COSE_KEY_Y]
     salt_enc = hmac_secret[2]  # The encrypted salt.
     salt_auth = hmac_secret[3]  # The HMAC of the encrypted salt.
     if (
@@ -1686,11 +1778,11 @@ def cbor_get_assertion_hmac_secret(
         raise CborError(_ERR_INVALID_LEN)
 
     # Compute the ECDH shared secret.
-    ecdh_result = nist256p1.multiply(_KEY_AGREEMENT_PRIVKEY, b"\04" + x + y)
+    ecdh_result = nist256p1.multiply(KEY_AGREEMENT_PRIVKEY, b"\04" + x + y)
     shared_secret = hashlib.sha256(ecdh_result[1:33]).digest()
 
     # Check the authentication tag and decrypt the salt.
-    tag = hmac.Hmac(shared_secret, salt_enc, hashlib.sha256).digest()[:16]
+    tag = hmac(hmac.SHA256, shared_secret, salt_enc).digest()[:16]
     if not utils.consteq(tag, salt_auth):
         raise CborError(_ERR_EXTENSION_FIRST)
     salt = aes(aes.CBC, shared_secret).decrypt(salt_enc)
@@ -1702,9 +1794,9 @@ def cbor_get_assertion_hmac_secret(
         return None
 
     # Compute the hmac-secret output.
-    output = hmac.Hmac(cred_random, salt[:32], hashlib.sha256).digest()
+    output = hmac(hmac.SHA256, cred_random, salt[:32]).digest()
     if len(salt) == 64:
-        output += hmac.Hmac(cred_random, salt[32:], hashlib.sha256).digest()
+        output += hmac(hmac.SHA256, cred_random, salt[32:]).digest()
 
     # Encrypt the hmac-secret output.
     return aes(aes.CBC, shared_secret).encrypt(output)
@@ -1714,7 +1806,7 @@ def cbor_get_assertion_sign(
     client_data_hash: bytes,
     rp_id_hash: bytes,
     cred: Credential,
-    hmac_secret: Optional[dict],
+    hmac_secret: dict | None,
     resident: bool,
     user_presence: bool,
     user_verification: bool,
@@ -1747,16 +1839,11 @@ def cbor_get_assertion_sign(
     )
 
     # Sign the authenticator data and the client data hash.
-    dig = hashlib.sha256()
-    dig.update(authenticator_data)
-    dig.update(client_data_hash)
     if user_presence:
-        privkey = cred.private_key()
+        sig = cred.sign((authenticator_data, client_data_hash))
     else:
-        # Spec deviation: Use a bogus key during silent authentication.
-        privkey = _BOGUS_PRIV_KEY
-    sig = nist256p1.sign(privkey, dig.digest(), False)
-    sig = der.encode_seq((sig[1:33], sig[33:]))
+        # Spec deviation: Use a bogus signature during silent authentication.
+        sig = cred.bogus_signature()
 
     # Encode the authenticatorGetAssertion response data.
     response = {
@@ -1784,6 +1871,8 @@ def cbor_get_info(req: Cmd) -> Cmd:
             "uv": True,
         },
         _GETINFO_RESP_PIN_PROTOCOLS: [1],
+        _GETINFO_RESP_MAX_CRED_COUNT_IN_LIST: _MAX_CRED_COUNT_IN_LIST,
+        _GETINFO_RESP_MAX_CRED_ID_LEN: CRED_ID_MAX_LENGTH,
     }
     return Cmd(req.cid, _CMD_CBOR, bytes([_ERR_NONE]) + cbor.encode(response_data))
 
@@ -1804,27 +1893,28 @@ def cbor_client_pin(req: Cmd) -> Cmd:
         return cbor_error(req.cid, _ERR_UNSUPPORTED_OPTION)
 
     # Encode the public key of the authenticator key agreement key.
-    # NOTE: There is currently no valid value for _COSE_ALG_KEY which describes the actual
-    # key agreement algorithm as specified, but _COSE_ALG_ECDH_ES_HKDF_256 is allegedly
+    # NOTE: There is currently no valid value for COSE_KEY_ALG which describes the actual
+    # key agreement algorithm as specified, but COSE_ALG_ECDH_ES_HKDF_256 is allegedly
     # recommended by the latest draft of the CTAP2 spec.
     response_data = {
         _CLIENTPIN_RESP_KEY_AGREEMENT: {
-            _COSE_ALG_KEY: _COSE_ALG_ECDH_ES_HKDF_256,
-            _COSE_KEY_TYPE_KEY: _COSE_KEY_TYPE_EC2,
-            _COSE_CURVE_KEY: _COSE_CURVE_P256,
-            _COSE_X_COORD_KEY: _KEY_AGREEMENT_PUBKEY[1:33],
-            _COSE_Y_COORD_KEY: _KEY_AGREEMENT_PUBKEY[33:],
+            common.COSE_KEY_ALG: common.COSE_ALG_ECDH_ES_HKDF_256,
+            common.COSE_KEY_KTY: common.COSE_KEYTYPE_EC2,
+            common.COSE_KEY_CRV: common.COSE_CURVE_P256,
+            common.COSE_KEY_X: KEY_AGREEMENT_PUBKEY[1:33],
+            common.COSE_KEY_Y: KEY_AGREEMENT_PUBKEY[33:],
         }
     }
 
     return Cmd(req.cid, _CMD_CBOR, bytes([_ERR_NONE]) + cbor.encode(response_data))
 
 
-def cbor_reset(req: Cmd, dialog_mgr: DialogManager) -> Optional[Cmd]:
-    if not storage.is_initialized():
+def cbor_reset(req: Cmd, dialog_mgr: DialogManager) -> Cmd | None:
+    if not storage.device.is_initialized():
         if __debug__:
             log.warning(__name__, "not initialized")
-        return cbor_error(req.cid, _ERR_OPERATION_DENIED)
+        # Return success, because the authenticator is already in factory default state.
+        return cbor_error(req.cid, _ERR_NONE)
 
     if not dialog_mgr.set_state(Fido2ConfirmReset(req.cid, dialog_mgr.iface)):
         return cmd_error(req.cid, _ERR_CHANNEL_BUSY)

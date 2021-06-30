@@ -11,29 +11,31 @@ If number of inputs is small, in-memory mode is used = alpha, pseudo_outs are ke
 Otherwise pseudo_outs are offloaded with HMAC, alpha is offloaded encrypted under chacha_poly with
 key derived for exactly this purpose.
 """
-from .state import State
-
-from apps.monero.layout import confirms
+from apps.monero import layout
 from apps.monero.xmr import crypto, monero, serialize
 
+from .state import State
+
 if False:
-    from trezor.messages.MoneroTransactionSourceEntry import (
-        MoneroTransactionSourceEntry,
-    )
+    from apps.monero.xmr.types import Sc25519, Ge25519
+    from trezor.messages import MoneroTransactionSourceEntry
+    from trezor.messages import MoneroTransactionSetInputAck
 
 
-async def set_input(state: State, src_entr: MoneroTransactionSourceEntry):
-    from trezor.messages.MoneroTransactionSetInputAck import (
-        MoneroTransactionSetInputAck,
-    )
+async def set_input(
+    state: State, src_entr: MoneroTransactionSourceEntry
+) -> MoneroTransactionSetInputAck:
+    from trezor.messages import MoneroTransactionSetInputAck
     from apps.monero.xmr.crypto import chacha_poly
     from apps.monero.xmr.serialize_messages.tx_prefix import TxinToKey
     from apps.monero.signing import offloading_keys
 
     state.current_input_index += 1
 
-    await confirms.transaction_step(state, state.STEP_INP, state.current_input_index)
+    await layout.transaction_step(state, state.STEP_INP, state.current_input_index)
 
+    if state.last_step > state.STEP_INP:
+        raise ValueError("Invalid state transition")
     if state.current_input_index >= state.input_count:
         raise ValueError("Too many inputs")
     # real_output denotes which output in outputs is the real one (ours)
@@ -49,9 +51,7 @@ async def set_input(state: State, src_entr: MoneroTransactionSourceEntry):
     out_key = crypto.decodepoint(src_entr.outputs[src_entr.real_output].key.dest)
     # the tx_pub of our UTXO stored inside its transaction
     tx_key = crypto.decodepoint(src_entr.real_out_tx_key)
-    additional_keys = [
-        crypto.decodepoint(x) for x in src_entr.real_out_additional_tx_keys
-    ]
+    additional_tx_pub_key = _get_additional_public_key(src_entr)
 
     """
     Calculates `derivation = Ra`, private spend key `x = H(Ra||i) + b` to be able
@@ -62,8 +62,10 @@ async def set_input(state: State, src_entr: MoneroTransactionSourceEntry):
         state.subaddresses,
         out_key,
         tx_key,
-        additional_keys,
+        additional_tx_pub_key,
         src_entr.real_output_in_tx_index,
+        state.account_idx,
+        src_entr.subaddr_minor,
     )
     state.mem_trace(1, True)
 
@@ -86,7 +88,7 @@ async def set_input(state: State, src_entr: MoneroTransactionSourceEntry):
     state.mem_trace(2, True)
 
     # HMAC(T_in,i || vin_i)
-    hmac_vini = await offloading_keys.gen_hmac_vini(
+    hmac_vini = offloading_keys.gen_hmac_vini(
         state.key_hmac, src_entr, vini_bin, state.current_input_index
     )
     state.mem_trace(3, True)
@@ -111,6 +113,7 @@ async def set_input(state: State, src_entr: MoneroTransactionSourceEntry):
         crypto.encodeint(xi),
     )
 
+    state.last_step = state.STEP_INP
     if state.current_input_index + 1 == state.input_count:
         """
         When we finish the inputs processing, we no longer need
@@ -129,7 +132,7 @@ async def set_input(state: State, src_entr: MoneroTransactionSourceEntry):
     )
 
 
-def _gen_commitment(state: State, in_amount):
+def _gen_commitment(state: State, in_amount: int) -> tuple[Sc25519, Ge25519]:
     """
     Computes Pedersen commitment - pseudo outs
     Here is slight deviation from the original protocol.
@@ -145,7 +148,7 @@ def _gen_commitment(state: State, in_amount):
     return alpha, crypto.gen_commitment(alpha, in_amount)
 
 
-def _absolute_output_offsets_to_relative(off):
+def _absolute_output_offsets_to_relative(off: list[int]) -> list[int]:
     """
     Mixin outputs are specified in relative numbers. First index is absolute
     and the rest is an offset of a previous one.
@@ -159,3 +162,22 @@ def _absolute_output_offsets_to_relative(off):
     for i in range(len(off) - 1, 0, -1):
         off[i] -= off[i - 1]
     return off
+
+
+def _get_additional_public_key(
+    src_entr: MoneroTransactionSourceEntry,
+) -> Ge25519 | None:
+    additional_tx_pub_key = None
+    if len(src_entr.real_out_additional_tx_keys) == 1:  # compression
+        additional_tx_pub_key = crypto.decodepoint(
+            src_entr.real_out_additional_tx_keys[0]
+        )
+    elif src_entr.real_out_additional_tx_keys:
+        if src_entr.real_output_in_tx_index >= len(
+            src_entr.real_out_additional_tx_keys
+        ):
+            raise ValueError("Wrong number of additional derivations")
+        additional_tx_pub_key = crypto.decodepoint(
+            src_entr.real_out_additional_tx_keys[src_entr.real_output_in_tx_index]
+        )
+    return additional_tx_pub_key

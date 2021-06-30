@@ -21,11 +21,6 @@ import struct
 import unicodedata
 from typing import List, NewType
 
-from .coins import slip44
-from .exceptions import TrezorFailure
-
-CallException = TrezorFailure
-
 HARDENED_FLAG = 1 << 31
 
 Address = NewType("Address", List[int])
@@ -43,6 +38,14 @@ def btc_hash(data):
     Double-SHA256 hash as used in BTC
     """
     return hashlib.sha256(hashlib.sha256(data).digest()).digest()
+
+
+def tx_hash(data):
+    """Calculate and return double-SHA256 hash in reverse order.
+
+    This is what Bitcoin uses as txids.
+    """
+    return btc_hash(data)[::-1]
 
 
 def hash_160(public_key):
@@ -168,11 +171,6 @@ def parse_path(nstr: str) -> Address:
     if n[0] == "m":
         n = n[1:]
 
-    # coin_name/a/b/c => 44'/SLIP44_constant'/a/b/c
-    if n[0] in slip44:
-        coin_id = slip44[n[0]]
-        n[0:1] = ["44h", "{}h".format(coin_id)]
-
     def str_to_harden(x: str) -> int:
         if x.startswith("-"):
             return H_(abs(int(x)))
@@ -183,8 +181,8 @@ def parse_path(nstr: str) -> Address:
 
     try:
         return [str_to_harden(x) for x in n]
-    except Exception:
-        raise ValueError("Invalid BIP32 path", nstr)
+    except Exception as e:
+        raise ValueError("Invalid BIP32 path", nstr) from e
 
 
 def normalize_nfc(txt):
@@ -269,3 +267,51 @@ def dict_from_camelcase(d, renames=None):
             res[newkey] = dict_from_camelcase(value, renames)
 
     return res
+
+
+# adapted from https://github.com/bitcoin-core/HWI/blob/master/hwilib/descriptor.py
+
+
+def descriptor_checksum(desc: str) -> str:
+    def _polymod(c: int, val: int) -> int:
+        c0 = c >> 35
+        c = ((c & 0x7FFFFFFFF) << 5) ^ val
+        if c0 & 1:
+            c ^= 0xF5DEE51989
+        if c0 & 2:
+            c ^= 0xA9FDCA3312
+        if c0 & 4:
+            c ^= 0x1BAB10E32D
+        if c0 & 8:
+            c ^= 0x3706B1677A
+        if c0 & 16:
+            c ^= 0x644D626FFD
+        return c
+
+    INPUT_CHARSET = "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ "
+    CHECKSUM_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+    c = 1
+    cls = 0
+    clscount = 0
+    for ch in desc:
+        pos = INPUT_CHARSET.find(ch)
+        if pos == -1:
+            return ""
+        c = _polymod(c, pos & 31)
+        cls = cls * 3 + (pos >> 5)
+        clscount += 1
+        if clscount == 3:
+            c = _polymod(c, cls)
+            cls = 0
+            clscount = 0
+    if clscount > 0:
+        c = _polymod(c, cls)
+    for j in range(0, 8):
+        c = _polymod(c, 0)
+    c ^= 1
+
+    ret = [""] * 8
+    for j in range(0, 8):
+        ret[j] = CHECKSUM_CHARSET[(c >> (5 * (7 - j))) & 31]
+    return "".join(ret)

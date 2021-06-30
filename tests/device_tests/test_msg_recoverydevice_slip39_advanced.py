@@ -63,7 +63,7 @@ def test_secret(client, shares, secret):
     assert client.features.pin_protection is False
     assert client.features.passphrase_protection is False
     assert client.features.backup_type is messages.BackupType.Slip39_Advanced
-    assert debug.read_mnemonic_secret().hex() == secret
+    assert debug.state().mnemonic_secret.hex() == secret
 
 
 @pytest.mark.setup_client(uninitialized=True)
@@ -164,8 +164,8 @@ def test_same_share(client):
         for word in second_share:
             debug.input(word)
 
-        code = yield
-        assert code == messages.ButtonRequestType.Warning
+        br = yield
+        assert br.code == messages.ButtonRequestType.Warning
 
         client.cancel()
 
@@ -204,8 +204,8 @@ def test_group_threshold_reached(client):
         for word in second_share:
             debug.input(word)
 
-        code = yield
-        assert code == messages.ButtonRequestType.Warning
+        br = yield
+        assert br.code == messages.ButtonRequestType.Warning
 
         client.cancel()
 

@@ -7,31 +7,18 @@ EXCLUDE_TARGETS=messages
 
 all: build
 
-clean-gen: ## remove generated files
-	rm -f src/trezorlib/messages/*.py
-	rm -f src/trezorlib/coins.json
-
-coins_json:
-	./helper-scripts/build-coins-json.sh
-
-coins_json_check:
-	./helper-scripts/build-coins-json.sh --check
-
-gen: clean-gen
-	make -C .. gen
-
 build:
 	$(SETUP) build
 
 install:
 	$(SETUP) install
 
-dist: clean doc
+dist: doc clean
 	$(SETUP) sdist
 	$(SETUP) bdist_wheel
 
 doc:
-	$(PYTHON) helper-scripts/linkify-changelog.py
+	make -C .. changelog
 	$(PYTHON) helper-scripts/make-options-rst.py
 
 clean: clean-build clean-pyc clean-test ## remove all build, test, coverage and Python artifacts

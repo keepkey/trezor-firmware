@@ -17,13 +17,18 @@
 from unittest import mock
 
 import pytest
-import shamir_mnemonic as shamir
+from shamir_mnemonic import shamir
 
 from trezorlib import device, messages as proto
 from trezorlib.exceptions import TrezorFailure
 from trezorlib.messages import BackupType, ButtonRequestType as B
 
-from ..common import click_through, generate_entropy, read_and_confirm_mnemonic
+from ..common import (
+    click_through,
+    generate_entropy,
+    paging_responses,
+    read_and_confirm_mnemonic,
+)
 
 EXTERNAL_ENTROPY = b"zlutoucky kun upel divoke ody" * 2
 
@@ -35,6 +40,7 @@ class TestMsgResetDeviceT2:
     def test_reset_device_slip39_advanced(self, client):
         strength = 128
         word_count = 20
+        mnemonic_page_count = (word_count // 4) + 1
         member_threshold = 3
         all_mnemonics = []
 
@@ -56,19 +62,17 @@ class TestMsgResetDeviceT2:
             for g in range(5):
                 for h in range(5):
                     # mnemonic phrases
-                    btn_code = yield
-                    assert btn_code == B.ResetDevice
-                    mnemonic = read_and_confirm_mnemonic(client.debug, words=word_count)
+                    mnemonic = yield from read_and_confirm_mnemonic(client.debug)
                     all_mnemonics.append(mnemonic)
 
                     # Confirm continue to next share
-                    btn_code = yield
-                    assert btn_code == B.Success
+                    br = yield
+                    assert br.code == B.Success
                     client.debug.press_yes()
 
             # safety warning
-            btn_code = yield
-            assert btn_code == B.Success
+            br = yield
+            assert br.code == B.Success
             client.debug.press_yes()
 
         os_urandom = mock.Mock(return_value=EXTERNAL_ENTROPY)
@@ -94,59 +98,17 @@ class TestMsgResetDeviceT2:
                     proto.ButtonRequest(code=B.ResetDevice),
                     proto.ButtonRequest(code=B.ResetDevice),  # group #5 counts
                     proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.ResetDevice),  # show seeds
+                ]
+                + [
+                    # individual mnemonic
+                    *paging_responses(mnemonic_page_count, code=B.ResetDevice),
                     proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
+                ]
+                * (5 * 5)  # groups * shares
+                + [
                     proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),
-                    proto.ButtonRequest(code=B.ResetDevice),
-                    proto.ButtonRequest(code=B.Success),  # show seeds ends here
-                    proto.ButtonRequest(code=B.Success),
-                    proto.Success(),
-                    proto.Features(),
+                    proto.Success,
+                    proto.Features,
                 ]
             )
             client.set_input_flow(input_flow)
@@ -186,7 +148,6 @@ def validate_mnemonics(mnemonics, threshold, expected_ems):
     # 3of5 shares 3of5 groups
     # TODO: test all possible group+share combinations?
     test_combination = mnemonics[0:3] + mnemonics[5:8] + mnemonics[10:13]
-    ms = shamir.combine_mnemonics(test_combination)
-    identifier, iteration_exponent, _, _, _ = shamir._decode_mnemonics(test_combination)
-    ems = shamir._encrypt(ms, b"", iteration_exponent, identifier)
-    assert ems == expected_ems
+    groups = shamir.decode_mnemonics(test_combination)
+    ems = shamir.recover_ems(groups)
+    assert expected_ems == ems.ciphertext

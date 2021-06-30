@@ -26,7 +26,7 @@ const CoinInfo coins[COINS_COUNT] = {
 % for c in supported_on("trezor1", bitcoin):
 {
 	.coin_name = ${c_str(c.coin_name)},
-	.coin_shortcut = ${c_str(" " + c.coin_shortcut)},
+	.coin_shortcut = ${c_str(c.coin_shortcut)},
 	.maxfee_kb = ${c_int(c.maxfee_kb)},
 	.signed_message_header = ${signed_message_header(c.signed_message_header)},
 	.has_segwit = ${c_bool(c.segwit)},
@@ -39,6 +39,8 @@ const CoinInfo coins[COINS_COUNT] = {
 	.xpub_magic = ${hex(c.xpub_magic)},
 	.xpub_magic_segwit_p2sh = ${hex(c.xpub_magic_segwit_p2sh)},
 	.xpub_magic_segwit_native = ${hex(c.xpub_magic_segwit_native)},
+	.xpub_magic_multisig_segwit_p2sh = ${hex(c.xpub_magic_multisig_segwit_p2sh)},
+	.xpub_magic_multisig_segwit_native = ${hex(c.xpub_magic_multisig_segwit_native)},
 	.fork_id = ${c_int(c.fork_id)},
 	.bech32_prefix = ${c_str(c.bech32_prefix)},
 	.cashaddr_prefix = ${c_str(c.cashaddr_prefix)},
@@ -46,6 +48,9 @@ const CoinInfo coins[COINS_COUNT] = {
 	.negative_fee = ${c_bool(c.negative_fee)},
 	.curve_name = ${c.curve_name.upper()}_NAME,
 	.curve = &${c.curve_name}_info,
+	.extra_data = ${c_bool(c.extra_data)},
+	.timestamp = ${c_bool(c.timestamp)},
+	.overwintered = ${c_bool(c.consensus_branch_id)},
 },
 % endfor
 };

@@ -2,33 +2,32 @@
 
 ## 1. Running the full test suite
 
-_Note: You need Pipenv, as mentioned in the core's [documentation](https://docs.trezor.io/trezor-firmware/core/) section._
+_Note: You need Poetry, as mentioned in the core's [documentation](https://docs.trezor.io/trezor-firmware/core/) section._
 
 In the `trezor-firmware` checkout, in the root of the monorepo, install the environment:
 
 ```sh
-pipenv sync
+poetry install
 ```
 
 And run the automated tests:
 
 ```sh
-pipenv run make -C core test_emu
+poetry run make -C core test_emu
 ```
 
 ## 2. Running tests manually
 
-Install the pipenv environment as outlined above. Then switch to a shell inside the
+Install the poetry environment as outlined above. Then switch to a shell inside the
 environment:
 
 ```sh
-pipenv shell
+poetry shell
 ```
 
-If you want to test against the emulator, run it in a separate terminal from the `core`
-subdirectory:
+If you want to test against the emulator, run it in a separate terminal:
 ```sh
-PYOPT=0 ./emu.sh
+./core/emu.py
 ```
 
 Now you can run the test suite with `pytest` from the root directory:
@@ -73,3 +72,37 @@ You must not use both on the same test.
 
 [pytest-random-order]: https://pypi.org/project/pytest-random-order/
 [REGISTERED_MARKERS]: ../REGISTERED_MARKERS
+
+## Extended testing and debugging
+
+### Building for debugging (Emulator only)
+
+Build the debuggable unix binary so you can attach the gdb or lldb.
+This removes optimizations and reduces address space randomizaiton.
+
+```sh
+make build_unix_debug
+```
+
+The final executable is significantly slower due to ASAN(Address Sanitizer) integration.
+If you wan't to catch some memory errors use this.
+
+```sh
+time ASAN_OPTIONS=verbosity=1:detect_invalid_pointer_pairs=1:strict_init_order=true:strict_string_checks=true TREZOR_PROFILE="" poetry run make test_emu
+```
+
+### Coverage (Emulator only)
+
+Get the Python code coverage report.
+
+If you want to get HTML/console summary output you need to install the __coverage.py__ tool.
+
+```sh
+pip3 install coverage
+```
+
+Run the tests with coverage output.
+
+```sh
+make build_unix && make coverage
+```

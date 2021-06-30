@@ -1,5 +1,6 @@
+import sys
+
 from trezor.utils import ensure
-from utest import assert_async
 
 
 class SkipTest(Exception):
@@ -10,6 +11,7 @@ class AssertRaisesContext:
 
     def __init__(self, exc):
         self.expected = exc
+        self.value = None
 
     def __enter__(self):
         return self
@@ -18,6 +20,7 @@ class AssertRaisesContext:
         if exc_type is None:
             ensure(False, "%r not raised" % self.expected)
         if issubclass(exc_type, self.expected):
+            self.value = exc_value
             return True
         return False
 
@@ -30,7 +33,11 @@ class TestCase:
     def assertEqual(self, x, y, msg=''):
         if not msg:
             msg = "%r vs (expected) %r" % (x, y)
-        ensure(x == y, msg)
+
+        if x.__class__ == y.__class__ and x.__class__.__name__ == "Msg":
+            self.assertMessageEqual(x, y)
+        else:
+            ensure(x == y, msg)
 
     def assertNotEqual(self, x, y, msg=''):
         if not msg:
@@ -120,11 +127,12 @@ class TestCase:
             return AssertRaisesContext(exc)
         try:
             func(*args, **kwargs)
-            ensure(False, "%r not raised" % exc)
         except Exception as e:
             if isinstance(e, exc):
                 return
             raise
+        else:
+            ensure(False, "%r not raised" % exc)
 
     def assertListEqual(self, x, y, msg=''):
         if len(x) != len(y):
@@ -134,6 +142,35 @@ class TestCase:
 
         for i in range(len(x)):
             self.assertEqual(x[i], y[i], msg)
+
+    def assertAsync(self, task, syscalls):
+        for prev_result, expected in syscalls:
+            if isinstance(expected, Exception):
+                with self.assertRaises(expected.__class__):
+                    task.send(prev_result)
+            else:
+                syscall = task.send(prev_result)
+                self.assertObjectEqual(syscall, expected)
+
+    def assertObjectEqual(self, a, b, msg=''):
+        self.assertIsInstance(a, b.__class__, msg)
+        self.assertEqual(a.__dict__, b.__dict__, msg)
+
+    def assertMessageEqual(self, x, y):
+        self.assertEqual(
+            x.MESSAGE_NAME,
+            y.MESSAGE_NAME,
+            "Expected {}, found {}".format(x.MESSAGE_NAME, y.MESSAGE_NAME)
+        )
+        xdict = x.__dict__
+        ydict = y.__dict__
+        for key in xdict:
+            self.assertTrue(key in ydict)
+            self.assertEqual(
+                xdict[key],
+                ydict[key],
+                "At {}.{} expected {}, found {}".format(x.MESSAGE_NAME, key, xdict[key], ydict[key])
+            )
 
 
 def skip(msg):
@@ -181,6 +218,9 @@ class TestResult:
         return self.errorsNum == 0 and self.failuresNum == 0
 
 
+generator_type = type((lambda: (yield))())
+
+
 def run_class(c, test_result):
     o = c()
     set_up = getattr(o, "setUp", lambda: None)
@@ -188,21 +228,31 @@ def run_class(c, test_result):
     print('class', c.__qualname__)
     for name in dir(o):
         if name.startswith("test"):
-            is_async = name.startswith("test_async")
             print(' ', name, end=' ...')
             m = getattr(o, name)
             try:
-                set_up()
-                test_result.testsRun += 1
-                if is_async:
-                    assert_async(m(), [(None, StopIteration()), ])
-                else:
-                    m()
-                tear_down()
+                try:
+                    set_up()
+                    test_result.testsRun += 1
+                    retval = m()
+                    if isinstance(retval, generator_type):
+                        raise RuntimeError("{} must not be a generator (it is async, uses yield or await).".format(name))
+                    elif retval is not None:
+                        raise RuntimeError("{} should not return a result.".format(name))
+                finally:
+                    tear_down()
                 print(" ok")
             except SkipTest as e:
                 print(" skipped:", e.args[0])
                 test_result.skippedNum += 1
+            except AssertionError as e:
+                print(" failed")
+                sys.print_exception(e)
+                test_result.failuresNum += 1
+            except BaseException as e:
+                print(" errored:", e)
+                sys.print_exception(e)
+                test_result.errorsNum += 1
 
 
 def main(module="__main__"):
@@ -219,6 +269,16 @@ def main(module="__main__"):
     runner = TestRunner()
     result = runner.run(suite)
     msg = "Ran %d tests" % result.testsRun
+    result_strs = []
     if result.skippedNum > 0:
-        msg += " (%d skipped)" % result.skippedNum
+        result_strs.append("{} skipped".format(result.skippedNum))
+    if result.failuresNum > 0:
+        result_strs.append("{} failed".format(result.failuresNum))
+    if result.errorsNum > 0:
+        result_strs.append("{} errored".format(result.errorsNum))
+    if result_strs:
+        msg += " (" + ", ".join(result_strs) + ")"
     print(msg)
+
+    if not result.wasSuccessful():
+        raise SystemExit(1)

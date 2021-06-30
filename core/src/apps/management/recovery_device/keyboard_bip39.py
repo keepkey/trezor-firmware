@@ -1,11 +1,15 @@
-from trezor import io, loop, res, ui
+from trezor import io, loop, res, ui, workflow
 from trezor.crypto import bip39
 from trezor.ui import display
-from trezor.ui.button import Button, ButtonClear, ButtonMono, ButtonMonoConfirm
+from trezor.ui.components.tt.button import (
+    Button,
+    ButtonClear,
+    ButtonMono,
+    ButtonMonoConfirm,
+)
 
 if False:
-    from typing import Optional
-    from trezor.ui.button import ButtonContent, ButtonStyleStateType
+    from trezor.ui.components.tt.button import ButtonContent, ButtonStyleStateType
 
 
 def compute_mask(text: str) -> int:
@@ -87,8 +91,8 @@ class InputButton(Button):
 
 class Prompt(ui.Component):
     def __init__(self, prompt: str) -> None:
+        super().__init__()
         self.prompt = prompt
-        self.repaint = True
 
     def on_render(self) -> None:
         if self.repaint:
@@ -99,6 +103,7 @@ class Prompt(ui.Component):
 
 class Bip39Keyboard(ui.Layout):
     def __init__(self, prompt: str) -> None:
+        super().__init__()
         self.prompt = Prompt(prompt)
 
         icon_back = res.load(ui.ICON_BACK)
@@ -114,7 +119,7 @@ class Bip39Keyboard(ui.Layout):
                 ("abc", "def", "ghi", "jkl", "mno", "pqr", "stu", "vwx", "yz")
             )
         ]
-        self.pending_button = None  # type: Optional[Button]
+        self.pending_button: Button | None = None
         self.pending_index = 0
 
     def dispatch(self, event: int, x: int, y: int) -> None:
@@ -166,7 +171,7 @@ class Bip39Keyboard(ui.Layout):
         # Word was confirmed by the user.
         raise ui.Result(word)
 
-    def edit(self, text: str, button: Button = None, index: int = 0) -> None:
+    def edit(self, text: str, button: Button | None = None, index: int = 0) -> None:
         self.pending_button = button
         self.pending_index = index
 
@@ -191,7 +196,7 @@ class Bip39Keyboard(ui.Layout):
 
     async def handle_input(self) -> None:
         touch = loop.wait(io.TOUCH)
-        timeout = loop.sleep(1000 * 1000 * 1)
+        timeout = loop.sleep(1000)
         race_touch = loop.race(touch)
         race_timeout = loop.race(touch, timeout)
 
@@ -204,6 +209,14 @@ class Bip39Keyboard(ui.Layout):
 
             if touch in race.finished:
                 event, x, y = result
+                workflow.idle_timer.touch()
                 self.dispatch(event, x, y)
             else:
                 self.on_timeout()
+
+    if __debug__:
+
+        def create_tasks(self) -> tuple[loop.Task, ...]:
+            from apps.debug import input_signal
+
+            return super().create_tasks() + (input_signal(),)

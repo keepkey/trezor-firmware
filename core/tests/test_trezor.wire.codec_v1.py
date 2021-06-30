@@ -1,9 +1,6 @@
-import sys
-
-sys.path.append('../src')
-
-from utest import *
+from common import *
 from ubinascii import unhexlify
+import ustruct
 
 from trezor import io
 from trezor.loop import wait
@@ -12,7 +9,6 @@ from trezor.wire import codec_v1
 
 
 class MockHID:
-
     def __init__(self, num):
         self.num = num
         self.data = []
@@ -24,148 +20,187 @@ class MockHID:
         self.data.append(bytearray(msg))
         return len(msg)
 
-
-def test_reader():
-    rep_len = 64
-    interface_num = 0xdeadbeef
-    message_type = 0x4321
-    message_len = 250
-    interface = MockHID(interface_num)
-    reader = codec_v1.Reader(interface)
-
-    message = bytearray(range(message_len))
-    report_header = bytearray(unhexlify('3f23234321000000fa'))
-
-    # open, expected one read
-    first_report = report_header + message[:rep_len - len(report_header)]
-    assert_async(reader.aopen(), [(None, wait(io.POLL_READ | interface_num)), (first_report, StopIteration()), ])
-    assert_eq(reader.type, message_type)
-    assert_eq(reader.size, message_len)
-
-    # empty read
-    empty_buffer = bytearray()
-    assert_async(reader.areadinto(empty_buffer), [(None, StopIteration()), ])
-    assert_eq(len(empty_buffer), 0)
-    assert_eq(reader.size, message_len)
-
-    # short read, expected no read
-    short_buffer = bytearray(32)
-    assert_async(reader.areadinto(short_buffer), [(None, StopIteration()), ])
-    assert_eq(len(short_buffer), 32)
-    assert_eq(short_buffer, message[:len(short_buffer)])
-    assert_eq(reader.size, message_len - len(short_buffer))
-
-    # aligned read, expected no read
-    aligned_buffer = bytearray(rep_len - len(report_header) - len(short_buffer))
-    assert_async(reader.areadinto(aligned_buffer), [(None, StopIteration()), ])
-    assert_eq(aligned_buffer, message[len(short_buffer):][:len(aligned_buffer)])
-    assert_eq(reader.size, message_len - len(short_buffer) - len(aligned_buffer))
-
-    # one byte read, expected one read
-    next_report_header = bytearray(unhexlify('3f'))
-    next_report = next_report_header + message[rep_len - len(report_header):][:rep_len - len(next_report_header)]
-    onebyte_buffer = bytearray(1)
-    assert_async(reader.areadinto(onebyte_buffer), [(None, wait(io.POLL_READ | interface_num)), (next_report, StopIteration()), ])
-    assert_eq(onebyte_buffer, message[len(short_buffer):][len(aligned_buffer):][:len(onebyte_buffer)])
-    assert_eq(reader.size, message_len - len(short_buffer) - len(aligned_buffer) - len(onebyte_buffer))
-
-    # too long read, raises eof
-    assert_async(reader.areadinto(bytearray(reader.size + 1)), [(None, EOFError()), ])
-
-    # long read, expect multiple reads
-    start_size = reader.size
-    long_buffer = bytearray(start_size)
-    report_payload = message[rep_len - len(report_header) + rep_len - len(next_report_header):]
-    report_payload_head = report_payload[:rep_len - len(next_report_header) - len(onebyte_buffer)]
-    report_payload_rest = report_payload[len(report_payload_head):]
-    report_payload_rest = list(chunks(report_payload_rest, rep_len - len(next_report_header)))
-    report_payloads = [report_payload_head] + report_payload_rest
-    next_reports = [next_report_header + r for r in report_payloads]
-    expected_syscalls = []
-    for i, _ in enumerate(next_reports):
-        prev_report = next_reports[i - 1] if i > 0 else None
-        expected_syscalls.append((prev_report, wait(io.POLL_READ | interface_num)))
-    expected_syscalls.append((next_reports[-1], StopIteration()))
-    assert_async(reader.areadinto(long_buffer), expected_syscalls)
-    assert_eq(long_buffer, message[-start_size:])
-    assert_eq(reader.size, 0)
-
-    # one byte read, raises eof
-    assert_async(reader.areadinto(onebyte_buffer), [(None, EOFError()), ])
+    def wait_object(self, mode):
+        return wait(mode | self.num)
 
 
-def test_writer():
-    rep_len = 64
-    interface_num = 0xdeadbeef
-    message_type = 0x87654321
-    message_len = 1024
-    interface = MockHID(interface_num)
-    writer = codec_v1.Writer(interface)
-    writer.setheader(message_type, message_len)
+MESSAGE_TYPE = 0x4242
 
-    # init header corresponding to the data above
-    report_header = bytearray(unhexlify('3f2323432100000400'))
-
-    assert_eq(writer.data, report_header + bytearray(rep_len - len(report_header)))
-
-    # empty write
-    start_size = writer.size
-    assert_async(writer.awrite(bytearray()), [(None, StopIteration()), ])
-    assert_eq(writer.data, report_header + bytearray(rep_len - len(report_header)))
-    assert_eq(writer.size, start_size)
-
-    # short write, expected no report
-    start_size = writer.size
-    short_payload = bytearray(range(4))
-    assert_async(writer.awrite(short_payload), [(None, StopIteration()), ])
-    assert_eq(writer.size, start_size - len(short_payload))
-    assert_eq(writer.data,
-              report_header +
-              short_payload +
-              bytearray(rep_len - len(report_header) - len(short_payload)))
-
-    # aligned write, expected one report
-    start_size = writer.size
-    aligned_payload = bytearray(range(rep_len - len(report_header) - len(short_payload)))
-    assert_async(writer.awrite(aligned_payload), [(None, wait(io.POLL_WRITE | interface_num)), (None, StopIteration()), ])
-    assert_eq(interface.data, [report_header +
-                               short_payload +
-                               aligned_payload +
-                               bytearray(rep_len - len(report_header) - len(short_payload) - len(aligned_payload)), ])
-    assert_eq(writer.size, start_size - len(aligned_payload))
-    interface.data.clear()
-
-    # short write, expected no report, but data starts with correct seq and cont marker
-    report_header = bytearray(unhexlify('3f'))
-    start_size = writer.size
-    assert_async(writer.awrite(short_payload), [(None, StopIteration()), ])
-    assert_eq(writer.size, start_size - len(short_payload))
-    assert_eq(writer.data[:len(report_header) + len(short_payload)],
-              report_header + short_payload)
-
-    # long write, expected multiple reports
-    start_size = writer.size
-    long_payload_head = bytearray(range(rep_len - len(report_header) - len(short_payload)))
-    long_payload_rest = bytearray(range(start_size - len(long_payload_head)))
-    long_payload = long_payload_head + long_payload_rest
-    expected_payloads = [short_payload + long_payload_head] + list(chunks(long_payload_rest, rep_len - len(report_header)))
-    expected_reports = [report_header + r for r in expected_payloads]
-    expected_reports[-1] += bytearray(bytes(1) * (rep_len - len(expected_reports[-1])))
-    # test write
-    expected_write_reports = expected_reports[:-1]
-    assert_async(writer.awrite(long_payload), len(expected_write_reports) * [(None, wait(io.POLL_WRITE | interface_num))] + [(None, StopIteration())])
-    assert_eq(interface.data, expected_write_reports)
-    assert_eq(writer.size, start_size - len(long_payload))
-    interface.data.clear()
-    # test write raises eof
-    assert_async(writer.awrite(bytearray(1)), [(None, EOFError())])
-    assert_eq(interface.data, [])
-    # test close
-    expected_close_reports = expected_reports[-1:]
-    assert_async(writer.aclose(), len(expected_close_reports) * [(None, wait(io.POLL_WRITE | interface_num))] + [(None, StopIteration())])
-    assert_eq(interface.data, expected_close_reports)
-    assert_eq(writer.size, 0)
+HEADER_PAYLOAD_LENGTH = codec_v1._REP_LEN - 3 - ustruct.calcsize(">HL")
 
 
-if __name__ == '__main__':
-    run_tests()
+def make_header(mtype, length):
+    return b"?##" + ustruct.pack(">HL", mtype, length)
+
+
+class TestWireCodecV1(unittest.TestCase):
+    def setUp(self):
+        self.interface = MockHID(0xDEADBEEF)
+
+    def test_read_one_packet(self):
+        # zero length message - just a header
+        message_packet = make_header(mtype=MESSAGE_TYPE, length=0)
+        buffer = bytearray(64)
+
+        gen = codec_v1.read_message(self.interface, buffer)
+
+        query = gen.send(None)
+        self.assertObjectEqual(query, self.interface.wait_object(io.POLL_READ))
+
+        with self.assertRaises(StopIteration) as e:
+            gen.send(message_packet)
+
+        # e.value is StopIteration. e.value.value is the return value of the call
+        result = e.value.value
+        self.assertEqual(result.type, MESSAGE_TYPE)
+        self.assertEqual(result.data, b"")
+
+        # message should have been read into the buffer
+        self.assertEqual(buffer, b"\x00" * 64)
+
+    def test_read_many_packets(self):
+        message = bytes(range(256))
+
+        header = make_header(mtype=MESSAGE_TYPE, length=len(message))
+        # first packet is header + (remaining)data
+        # other packets are "?" + 63 bytes of data
+        packets = [header + message[:HEADER_PAYLOAD_LENGTH]] + [
+            b"?" + chunk
+            for chunk in chunks(message[HEADER_PAYLOAD_LENGTH:], codec_v1._REP_LEN - 1)
+        ]
+
+        buffer = bytearray(256)
+        gen = codec_v1.read_message(self.interface, buffer)
+        query = gen.send(None)
+        for packet in packets[:-1]:
+            self.assertObjectEqual(query, self.interface.wait_object(io.POLL_READ))
+            query = gen.send(packet)
+
+        # last packet will stop
+        with self.assertRaises(StopIteration) as e:
+            gen.send(packets[-1])
+
+        # e.value is StopIteration. e.value.value is the return value of the call
+        result = e.value.value
+        self.assertEqual(result.type, MESSAGE_TYPE)
+        self.assertEqual(result.data, message)
+
+        # message should have been read into the buffer
+        self.assertEqual(buffer, message)
+
+    def test_read_large_message(self):
+        message = b"hello world"
+        header = make_header(mtype=MESSAGE_TYPE, length=len(message))
+
+        packet = header + message
+        # make sure we fit into one packet, to make this easier
+        self.assertTrue(len(packet) <= codec_v1._REP_LEN)
+
+        buffer = bytearray(1)
+        self.assertTrue(len(buffer) <= len(packet))
+
+        gen = codec_v1.read_message(self.interface, buffer)
+        query = gen.send(None)
+        self.assertObjectEqual(query, self.interface.wait_object(io.POLL_READ))
+        with self.assertRaises(StopIteration) as e:
+            gen.send(packet)
+
+        # e.value is StopIteration. e.value.value is the return value of the call
+        result = e.value.value
+        self.assertEqual(result.type, MESSAGE_TYPE)
+        self.assertEqual(result.data, message)
+
+        # read should have allocated its own buffer and not touch ours
+        self.assertEqual(buffer, b"\x00")
+
+    def test_write_one_packet(self):
+        gen = codec_v1.write_message(self.interface, MESSAGE_TYPE, b"")
+
+        query = gen.send(None)
+        self.assertObjectEqual(query, self.interface.wait_object(io.POLL_WRITE))
+        with self.assertRaises(StopIteration):
+            gen.send(None)
+
+        header = make_header(mtype=MESSAGE_TYPE, length=0)
+        expected_message = header + b"\x00" * HEADER_PAYLOAD_LENGTH
+        self.assertTrue(self.interface.data == [expected_message])
+
+    def test_write_multiple_packets(self):
+        message = bytes(range(256))
+        gen = codec_v1.write_message(self.interface, MESSAGE_TYPE, message)
+
+        header = make_header(mtype=MESSAGE_TYPE, length=len(message))
+        # first packet is header + (remaining)data
+        # other packets are "?" + 63 bytes of data
+        packets = [header + message[:HEADER_PAYLOAD_LENGTH]] + [
+            b"?" + chunk
+            for chunk in chunks(message[HEADER_PAYLOAD_LENGTH:], codec_v1._REP_LEN - 1)
+        ]
+
+        for _ in packets:
+            # we receive as many queries as there are packets
+            query = gen.send(None)
+            self.assertObjectEqual(query, self.interface.wait_object(io.POLL_WRITE))
+
+        # the first sent None only started the generator. the len(packets)-th None
+        # will finish writing and raise StopIteration
+        with self.assertRaises(StopIteration):
+            gen.send(None)
+
+        # packets must be identical up to the last one
+        self.assertListEqual(packets[:-1], self.interface.data[:-1])
+        # last packet must be identical up to message length. remaining bytes in
+        # the 64-byte packets are garbage -- in particular, it's the bytes of the
+        # previous packet
+        last_packet = packets[-1] + packets[-2][len(packets[-1]) :]
+        self.assertEqual(last_packet, self.interface.data[-1])
+
+    def test_roundtrip(self):
+        message = bytes(range(256))
+        gen = codec_v1.write_message(self.interface, MESSAGE_TYPE, message)
+
+        # exhaust the iterator:
+        # (XXX we can only do this because the iterator is only accepting None and returns None)
+        for query in gen:
+            self.assertObjectEqual(query, self.interface.wait_object(io.POLL_WRITE))
+
+        buffer = bytearray(1024)
+        gen = codec_v1.read_message(self.interface, buffer)
+        query = gen.send(None)
+        for packet in self.interface.data[:-1]:
+            self.assertObjectEqual(query, self.interface.wait_object(io.POLL_READ))
+            query = gen.send(packet)
+
+        with self.assertRaises(StopIteration) as e:
+            gen.send(self.interface.data[-1])
+
+        result = e.value.value
+        self.assertEqual(result.type, MESSAGE_TYPE)
+        self.assertEqual(result.data, message)
+
+    def test_read_huge_packet(self):
+        PACKET_COUNT = 100_000
+        # message that takes up 100 000 USB packets
+        message_size = (PACKET_COUNT - 1) * 63 + HEADER_PAYLOAD_LENGTH
+        # ensure that a message this big won't fit into memory
+        self.assertRaises(MemoryError, bytearray, message_size)
+
+        header = make_header(mtype=MESSAGE_TYPE, length=message_size)
+        packet = header + b"\x00" * HEADER_PAYLOAD_LENGTH
+
+        buffer = bytearray(65536)
+        gen = codec_v1.read_message(self.interface, buffer)
+
+        query = gen.send(None)
+        for _ in range(PACKET_COUNT - 1):
+            self.assertObjectEqual(query, self.interface.wait_object(io.POLL_READ))
+            query = gen.send(packet)
+
+        with self.assertRaises(codec_v1.CodecError) as e:
+            gen.send(packet)
+
+        self.assertEqual(e.value.args[0], "Message too large")
+
+
+if __name__ == "__main__":
+    unittest.main()

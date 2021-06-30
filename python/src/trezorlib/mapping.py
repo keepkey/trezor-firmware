@@ -14,27 +14,26 @@
 # You should have received a copy of the License along with this library.
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
-from . import messages
+import io
+from typing import Tuple
+
+from . import messages, protobuf
 
 map_type_to_class = {}
 map_class_to_type = {}
 
 
 def build_map():
-    for msg_name in dir(messages.MessageType):
-        if msg_name.startswith("__"):
-            continue
-
-        try:
-            msg_class = getattr(messages, msg_name)
-        except AttributeError:
+    for entry in messages.MessageType:
+        msg_class = getattr(messages, entry.name, None)
+        if msg_class is None:
             raise ValueError(
-                "Implementation of protobuf message '%s' is missing" % msg_name
+                f"Implementation of protobuf message '{entry.name}' is missing"
             )
 
-        if msg_class.MESSAGE_WIRE_TYPE != getattr(messages.MessageType, msg_name):
+        if msg_class.MESSAGE_WIRE_TYPE != entry.value:
             raise ValueError(
-                "Inconsistent wire type and MessageType record for '%s'" % msg_class
+                f"Inconsistent wire type and MessageType record for '{entry.name}'"
             )
 
         register_message(msg_class)
@@ -57,6 +56,19 @@ def get_type(msg):
 
 def get_class(t):
     return map_type_to_class[t]
+
+
+def encode(msg: protobuf.MessageType) -> Tuple[int, bytes]:
+    message_type = msg.MESSAGE_WIRE_TYPE
+    buf = io.BytesIO()
+    protobuf.dump_message(buf, msg)
+    return message_type, buf.getvalue()
+
+
+def decode(message_type: int, message_bytes: bytes) -> protobuf.MessageType:
+    cls = get_class(message_type)
+    buf = io.BytesIO(message_bytes)
+    return protobuf.load_message(buf, cls)
 
 
 build_map()

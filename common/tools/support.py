@@ -418,7 +418,7 @@ def release(
         nontokens = [coin for coin in missing_list if not coin_info.is_token(coin)]
         for coin in tokens:
             key = coin["key"]
-            assert not coin.get("duplicate")
+            # assert not coin.get("duplicate"), key
             if verbose:
                 print(f"Adding missing {key} ({coin['name']})")
             set_supported(device, key, version)
@@ -464,7 +464,7 @@ def set_support_value(key, entries, reason):
     """Set a support info variable.
 
     Examples:
-    support.py set coin:BTC trezor1=soon trezor2=2.0.7 webwallet=yes connect=no
+    support.py set coin:BTC trezor1=soon trezor2=2.0.7 suite=yes connect=no
     support.py set coin:LTC trezor1=yes connect=
 
     Setting a variable to "yes", "true" or "1" sets support to true.
@@ -498,8 +498,8 @@ def set_support_value(key, entries, reason):
             set_supported(device, key, True)
         elif value in ("no", "false", "0"):
             if device in coin_info.MISSING_SUPPORT_MEANS_NO:
-                click.echo("Setting explicitly unsupported for {device}.")
-                click.echo("Perhaps you meant removing support, i.e., '{device}=' ?")
+                click.echo(f"Setting explicitly unsupported for {device}.")
+                click.echo(f"Perhaps you meant removing support, i.e., '{device}=' ?")
             if not reason:
                 reason = click.prompt(f"Enter reason for not supporting on {device}:")
             set_unsupported(device, key, reason)

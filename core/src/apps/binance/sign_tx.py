@@ -1,24 +1,28 @@
+from trezor import wire
 from trezor.crypto.curve import secp256k1
 from trezor.crypto.hashlib import sha256
-from trezor.messages import MessageType
-from trezor.messages.BinanceCancelMsg import BinanceCancelMsg
-from trezor.messages.BinanceOrderMsg import BinanceOrderMsg
-from trezor.messages.BinanceSignedTx import BinanceSignedTx
-from trezor.messages.BinanceTransferMsg import BinanceTransferMsg
-from trezor.messages.BinanceTxRequest import BinanceTxRequest
+from trezor.enums import MessageType
+from trezor.messages import (
+    BinanceCancelMsg,
+    BinanceOrderMsg,
+    BinanceSignedTx,
+    BinanceTransferMsg,
+    BinanceTxRequest,
+)
 
-from apps.binance import CURVE, helpers, layout
 from apps.common import paths
+from apps.common.keychain import Keychain, auto_keychain
+
+from . import helpers, layout
 
 
-async def sign_tx(ctx, envelope, keychain):
+@auto_keychain(__name__)
+async def sign_tx(ctx, envelope, keychain: Keychain):
     # create transaction message -> sign it -> create signature/pubkey message -> serialize all
     if envelope.msg_count > 1:
-        raise ValueError("Multiple messages not supported")
-    await paths.validate_path(
-        ctx, helpers.validate_full_path, keychain, envelope.address_n, CURVE
-    )
+        raise wire.DataError("Multiple messages not supported.")
 
+    await paths.validate_path(ctx, keychain, envelope.address_n)
     node = keychain.derive(envelope.address_n)
 
     tx_req = BinanceTxRequest()
@@ -30,13 +34,16 @@ async def sign_tx(ctx, envelope, keychain):
         MessageType.BinanceTransferMsg,
     )
 
+    if envelope.source is None or envelope.source < 0:
+        raise wire.DataError("Source missing or invalid.")
+
     msg_json = helpers.produce_json_for_signing(envelope, msg)
 
-    if isinstance(msg, BinanceTransferMsg):
+    if BinanceTransferMsg.is_type_of(msg):
         await layout.require_confirm_transfer(ctx, msg)
-    elif isinstance(msg, BinanceOrderMsg):
+    elif BinanceOrderMsg.is_type_of(msg):
         await layout.require_confirm_order(ctx, msg)
-    elif isinstance(msg, BinanceCancelMsg):
+    elif BinanceCancelMsg.is_type_of(msg):
         await layout.require_confirm_cancel(ctx, msg)
     else:
         raise ValueError("input message unrecognized, is of type " + type(msg).__name__)

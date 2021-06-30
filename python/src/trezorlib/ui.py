@@ -20,14 +20,18 @@ import click
 from mnemonic import Mnemonic
 
 from . import device
+from .client import MAX_PIN_LENGTH, PASSPHRASE_ON_DEVICE
 from .exceptions import Cancelled
 from .messages import PinMatrixRequestType, WordRequestType
 
 PIN_MATRIX_DESCRIPTION = """
-Use the numeric keypad to describe number positions. The layout is:
-    7 8 9
-    4 5 6
-    1 2 3
+Use the numeric keypad or lowercase letters to describe number positions.
+
+The layout is:
+
+    7 8 9        e r t
+    4 5 6  -or-  d f g
+    1 2 3        c v b
 """.strip()
 
 RECOVERY_MATRIX_DESCRIPTION = """
@@ -58,14 +62,15 @@ def prompt(*args, **kwargs):
 
 
 class ClickUI:
-    def __init__(self, always_prompt=False):
+    def __init__(self, always_prompt=False, passphrase_on_host=False):
         self.pinmatrix_shown = False
         self.prompt_shown = False
         self.always_prompt = always_prompt
+        self.passphrase_on_host = passphrase_on_host
 
-    def button_request(self, code):
+    def button_request(self, _br):
         if not self.prompt_shown:
-            echo("Please confirm action on your Trezor device")
+            echo("Please confirm action on your Trezor device.")
         if not self.always_prompt:
             self.prompt_shown = True
 
@@ -93,12 +98,28 @@ class ClickUI:
                 pin = prompt("Please enter {}".format(desc), hide_input=True)
             except click.Abort:
                 raise Cancelled from None
-            if not pin.isdigit():
-                echo("Non-numerical value provided, please try again")
+
+            # translate letters to numbers if letters were used
+            if all(d in "cvbdfgert" for d in pin):
+                pin = pin.translate(str.maketrans("cvbdfgert", "123456789"))
+
+            if any(d not in "123456789" for d in pin):
+                echo(
+                    "The value may only consist of digits 1 to 9 or letters cvbdfgert."
+                )
+            elif len(pin) > MAX_PIN_LENGTH:
+                echo(
+                    "The value must be at most {} digits in length.".format(
+                        MAX_PIN_LENGTH
+                    )
+                )
             else:
                 return pin
 
-    def get_passphrase(self):
+    def get_passphrase(self, available_on_device):
+        if available_on_device and not self.passphrase_on_host:
+            return PASSPHRASE_ON_DEVICE
+
         if os.getenv("PASSPHRASE") is not None:
             echo("Passphrase required. Using PASSPHRASE environment variable.")
             return os.getenv("PASSPHRASE")
@@ -138,7 +159,7 @@ def mnemonic_words(expand=False, language="english"):
             return word
         matches = [w for w in wordlist if w.startswith(word)]
         if len(matches) == 1:
-            return word
+            return matches[0]
         echo("Choose one of: " + ", ".join(matches))
         raise KeyError(word)
 

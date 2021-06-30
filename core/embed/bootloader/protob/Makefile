@@ -1,7 +1,7 @@
-all: messages.pb.c types.pb.c
+all: messages.pb.c
 
 %.pb.c: %.pb %.options
-	../../../vendor/nanopb/generator/nanopb_generator.py $< -T
+	nanopb_generator $< -T -D . -s "mangle_names:M_FLATTEN"
 
 %.pb: %.proto
 	protoc -I/usr/include -I. $< -o $@

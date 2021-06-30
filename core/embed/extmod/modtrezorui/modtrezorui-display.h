@@ -17,8 +17,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "inflate.h"
-
 #include "display.h"
 
 /// class Display:
@@ -28,11 +26,9 @@
 ///
 ///     WIDTH: int  # display width in pixels
 ///     HEIGHT: int  # display height in pixels
-///     FONT_SIZE: int  # font height in pixels
 ///     FONT_MONO: int  # id of monospace font
 ///     FONT_NORMAL: int  # id of normal-width font
 ///     FONT_BOLD: int  # id of bold-width font
-///     FONT_MONO_BOLD: int # id of monospace bold-width font
 ///
 typedef struct _mp_obj_Display_t {
   mp_obj_base_t base;
@@ -97,8 +93,8 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_bar_obj, 6, 6,
 ///     w: int,
 ///     h: int,
 ///     fgcolor: int,
-///     bgcolor: int = None,
-///     radius: int = None,
+///     bgcolor: int | None = None,
+///     radius: int | None = None,
 /// ) -> None:
 ///     """
 ///     Renders a rounded bar at position (x,y = upper left corner) with width w
@@ -121,6 +117,33 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_bar_radius_obj,
                                            8, 8,
                                            mod_trezorui_Display_bar_radius);
 
+/// def toif_info(self, image: bytes) -> tuple[int, int, bool]:
+///     """
+///     Returns tuple containing TOIF image dimensions: width, height, and
+///     whether it is grayscale.
+///     Raises an exception for corrupted images.
+///     """
+STATIC mp_obj_t mod_trezorui_Display_toif_info(mp_obj_t self, mp_obj_t image) {
+  mp_buffer_info_t buffer = {0};
+  mp_get_buffer_raise(image, &buffer, MP_BUFFER_READ);
+
+  uint16_t w = 0;
+  uint16_t h = 0;
+  bool grayscale = false;
+  bool valid = display_toif_info(buffer.buf, buffer.len, &w, &h, &grayscale);
+
+  if (!valid) {
+    mp_raise_ValueError("Invalid image format");
+  }
+  mp_obj_tuple_t *tuple = MP_OBJ_TO_PTR(mp_obj_new_tuple(3, NULL));
+  tuple->items[0] = MP_OBJ_NEW_SMALL_INT(w);
+  tuple->items[1] = MP_OBJ_NEW_SMALL_INT(h);
+  tuple->items[2] = mp_obj_new_bool(grayscale);
+  return MP_OBJ_FROM_PTR(tuple);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_trezorui_Display_toif_info_obj,
+                                 mod_trezorui_Display_toif_info);
+
 /// def image(self, x: int, y: int, image: bytes) -> None:
 ///     """
 ///     Renders an image at position (x,y).
@@ -131,19 +154,18 @@ STATIC mp_obj_t mod_trezorui_Display_image(size_t n_args,
                                            const mp_obj_t *args) {
   mp_int_t x = mp_obj_get_int(args[1]);
   mp_int_t y = mp_obj_get_int(args[2]);
-  mp_buffer_info_t image;
+  mp_buffer_info_t image = {0};
   mp_get_buffer_raise(args[3], &image, MP_BUFFER_READ);
   const uint8_t *data = image.buf;
-  if (image.len < 8 || memcmp(data, "TOIf", 4) != 0) {
+
+  uint16_t w = 0;
+  uint16_t h = 0;
+  bool grayscale = false;
+  bool valid = display_toif_info(data, image.len, &w, &h, &grayscale);
+  if (!valid || grayscale) {
     mp_raise_ValueError("Invalid image format");
   }
-  mp_int_t w = *(uint16_t *)(data + 4);
-  mp_int_t h = *(uint16_t *)(data + 6);
-  mp_int_t datalen = *(uint32_t *)(data + 8);
-  if (datalen != image.len - 12) {
-    mp_raise_ValueError("Invalid size of data");
-  }
-  display_image(x, y, w, h, data + 12, datalen);
+  display_image(x, y, w, h, data + 12, image.len - 12);
   return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_image_obj, 4, 4,
@@ -162,24 +184,23 @@ STATIC mp_obj_t mod_trezorui_Display_avatar(size_t n_args,
                                             const mp_obj_t *args) {
   mp_int_t x = mp_obj_get_int(args[1]);
   mp_int_t y = mp_obj_get_int(args[2]);
-  mp_buffer_info_t image;
+  mp_buffer_info_t image = {0};
   mp_get_buffer_raise(args[3], &image, MP_BUFFER_READ);
   const uint8_t *data = image.buf;
-  if (image.len < 8 || memcmp(data, "TOIf", 4) != 0) {
+
+  uint16_t w = 0;
+  uint16_t h = 0;
+  bool grayscale = false;
+  bool valid = display_toif_info(data, image.len, &w, &h, &grayscale);
+  if (!valid || grayscale) {
     mp_raise_ValueError("Invalid image format");
   }
-  mp_int_t w = *(uint16_t *)(data + 4);
-  mp_int_t h = *(uint16_t *)(data + 6);
   if (w != AVATAR_IMAGE_SIZE || h != AVATAR_IMAGE_SIZE) {
     mp_raise_ValueError("Invalid image size");
   }
-  mp_int_t datalen = *(uint32_t *)(data + 8);
-  if (datalen != image.len - 12) {
-    mp_raise_ValueError("Invalid size of data");
-  }
   mp_int_t fgcolor = mp_obj_get_int(args[4]);
   mp_int_t bgcolor = mp_obj_get_int(args[5]);
-  display_avatar(x, y, data + 12, datalen, fgcolor, bgcolor);
+  display_avatar(x, y, data + 12, image.len - 12, fgcolor, bgcolor);
   return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_avatar_obj, 6,
@@ -196,17 +217,16 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_avatar_obj, 6,
 STATIC mp_obj_t mod_trezorui_Display_icon(size_t n_args, const mp_obj_t *args) {
   mp_int_t x = mp_obj_get_int(args[1]);
   mp_int_t y = mp_obj_get_int(args[2]);
-  mp_buffer_info_t icon;
+  mp_buffer_info_t icon = {0};
   mp_get_buffer_raise(args[3], &icon, MP_BUFFER_READ);
   const uint8_t *data = icon.buf;
-  if (icon.len < 8 || memcmp(data, "TOIg", 4) != 0) {
+
+  uint16_t w = 0;
+  uint16_t h = 0;
+  bool grayscale = false;
+  bool valid = display_toif_info(data, icon.len, &w, &h, &grayscale);
+  if (!valid || !grayscale) {
     mp_raise_ValueError("Invalid image format");
-  }
-  mp_int_t w = *(uint16_t *)(data + 4);
-  mp_int_t h = *(uint16_t *)(data + 6);
-  mp_int_t datalen = *(uint32_t *)(data + 8);
-  if (datalen != icon.len - 12) {
-    mp_raise_ValueError("Invalid size of data");
   }
   mp_int_t fgcolor = mp_obj_get_int(args[4]);
   mp_int_t bgcolor = mp_obj_get_int(args[5]);
@@ -223,8 +243,8 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_icon_obj, 6, 6,
 ///     yoffset: int,
 ///     fgcolor: int,
 ///     bgcolor: int,
-///     icon: bytes = None,
-///     iconfgcolor: int = None,
+///     icon: bytes | None = None,
+///     iconfgcolor: int | None = None,
 /// ) -> None:
 ///     """
 ///     Renders a rotating loader graphic.
@@ -242,7 +262,7 @@ STATIC mp_obj_t mod_trezorui_Display_loader(size_t n_args,
   mp_int_t fgcolor = mp_obj_get_int(args[4]);
   mp_int_t bgcolor = mp_obj_get_int(args[5]);
   if (n_args > 6) {  // icon provided
-    mp_buffer_info_t icon;
+    mp_buffer_info_t icon = {0};
     mp_get_buffer_raise(args[6], &icon, MP_BUFFER_READ);
     const uint8_t *data = icon.buf;
     if (icon.len < 8 || memcmp(data, "TOIg", 4) != 0) {
@@ -250,14 +270,14 @@ STATIC mp_obj_t mod_trezorui_Display_loader(size_t n_args,
     }
     mp_int_t w = *(uint16_t *)(data + 4);
     mp_int_t h = *(uint16_t *)(data + 6);
-    mp_int_t datalen = *(uint32_t *)(data + 8);
+    uint32_t datalen = *(uint32_t *)(data + 8);
     if (w != LOADER_ICON_SIZE || h != LOADER_ICON_SIZE) {
       mp_raise_ValueError("Invalid icon size");
     }
     if (datalen != icon.len - 12) {
       mp_raise_ValueError("Invalid size of data");
     }
-    uint16_t iconfgcolor;
+    uint16_t iconfgcolor = 0;
     if (n_args > 7) {  // icon color provided
       iconfgcolor = mp_obj_get_int(args[7]);
     } else {
@@ -279,7 +299,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_loader_obj, 6,
 ///     Renders text using 5x8 bitmap font (using special text mode).
 ///     """
 STATIC mp_obj_t mod_trezorui_Display_print(mp_obj_t self, mp_obj_t text) {
-  mp_buffer_info_t buf;
+  mp_buffer_info_t buf = {0};
   mp_get_buffer_raise(text, &buf, MP_BUFFER_READ);
   if (buf.len > 0) {
     display_print(buf.buf, buf.len);
@@ -297,32 +317,44 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_trezorui_Display_print_obj,
 ///     font: int,
 ///     fgcolor: int,
 ///     bgcolor: int,
-///     minwidth: int = None,
-/// ) -> int:
+///     text_offset: int | None = None,
+///     text_len: int | None = None,
+/// ) -> None:
 ///     """
 ///     Renders left-aligned text at position (x,y) where x is left position and
 ///     y is baseline. Font font is used for rendering, fgcolor is used as
-///     foreground color, bgcolor as background. Fills at least minwidth pixels
-///     with bgcolor. Returns width of rendered text in pixels.
+///     foreground color, bgcolor as background.
+///
+///     Arguments text_offset and text_len can be used to render a substring of
+///     the text.
 ///     """
 STATIC mp_obj_t mod_trezorui_Display_text(size_t n_args, const mp_obj_t *args) {
   mp_int_t x = mp_obj_get_int(args[1]);
   mp_int_t y = mp_obj_get_int(args[2]);
-  mp_buffer_info_t text;
+  mp_buffer_info_t text = {0};
   mp_get_buffer_raise(args[3], &text, MP_BUFFER_READ);
   mp_int_t font = mp_obj_get_int(args[4]);
   mp_int_t fgcolor = mp_obj_get_int(args[5]);
   mp_int_t bgcolor = mp_obj_get_int(args[6]);
-  mp_int_t minwidth = (n_args > 7) ? mp_obj_get_int(args[7]) : 0;
-  // prefill start
-  int w = display_text_width(text.buf, text.len, font);
-  int barwidth = MAX(w, minwidth);
-  display_bar(x, y - 18, barwidth, 23, bgcolor);
-  // prefill end
-  display_text(x, y, text.buf, text.len, font, fgcolor, bgcolor);
-  return mp_obj_new_int(w);
+
+  const char *buf_start = text.buf;
+  int buf_len = text.len;
+  if (n_args > 7) {
+    mp_int_t off = mp_obj_get_int(args[7]);
+    mp_int_t len = n_args > 8 ? mp_obj_get_int(args[8]) : text.len - off;
+    if (off < 0 || off > text.len) {
+      mp_raise_ValueError("Invalid text_offset");
+    }
+    if (len < 0 || len + off > text.len) {
+      mp_raise_ValueError("Invalid text_len");
+    }
+    display_utf8_substr(text.buf, text.len, off, len, &buf_start, &buf_len);
+  }
+
+  display_text(x, y, buf_start, buf_len, font, fgcolor, bgcolor);
+  return mp_const_none;
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_obj, 7, 8,
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_obj, 7, 9,
                                            mod_trezorui_Display_text);
 
 /// def text_center(
@@ -333,34 +365,26 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_obj, 7, 8,
 ///     font: int,
 ///     fgcolor: int,
 ///     bgcolor: int,
-///     minwidth: int = None,
-/// ) -> int:
+/// ) -> None:
 ///     """
 ///     Renders text centered at position (x,y) where x is text center and y is
 ///     baseline. Font font is used for rendering, fgcolor is used as foreground
-///     color, bgcolor as background. Fills at least minwidth pixels with
-///     bgcolor. Returns width of rendered text in pixels.
+///     color, bgcolor as background.
 ///     """
 STATIC mp_obj_t mod_trezorui_Display_text_center(size_t n_args,
                                                  const mp_obj_t *args) {
   mp_int_t x = mp_obj_get_int(args[1]);
   mp_int_t y = mp_obj_get_int(args[2]);
-  mp_buffer_info_t text;
+  mp_buffer_info_t text = {0};
   mp_get_buffer_raise(args[3], &text, MP_BUFFER_READ);
   mp_int_t font = mp_obj_get_int(args[4]);
   mp_int_t fgcolor = mp_obj_get_int(args[5]);
   mp_int_t bgcolor = mp_obj_get_int(args[6]);
-  mp_int_t minwidth = (n_args > 7) ? mp_obj_get_int(args[7]) : 0;
-  // prefill start
-  int w = display_text_width(text.buf, text.len, font);
-  int barwidth = MAX(w, minwidth);
-  display_bar(x - barwidth / 2, y - 18, barwidth, 23, bgcolor);
-  // prefill end
   display_text_center(x, y, text.buf, text.len, font, fgcolor, bgcolor);
-  return mp_obj_new_int(w);
+  return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_center_obj,
-                                           7, 8,
+                                           7, 7,
                                            mod_trezorui_Display_text_center);
 
 /// def text_right(
@@ -371,50 +395,86 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_center_obj,
 ///     font: int,
 ///     fgcolor: int,
 ///     bgcolor: int,
-///     minwidth: int = None,
-/// ) -> int:
+/// ) -> None:
 ///     """
 ///     Renders right-aligned text at position (x,y) where x is right position
 ///     and y is baseline. Font font is used for rendering, fgcolor is used as
-///     foreground color, bgcolor as background. Fills at least minwidth pixels
-///     with bgcolor. Returns width of rendered text in pixels.
+///     foreground color, bgcolor as background.
 ///     """
 STATIC mp_obj_t mod_trezorui_Display_text_right(size_t n_args,
                                                 const mp_obj_t *args) {
   mp_int_t x = mp_obj_get_int(args[1]);
   mp_int_t y = mp_obj_get_int(args[2]);
-  mp_buffer_info_t text;
+  mp_buffer_info_t text = {0};
   mp_get_buffer_raise(args[3], &text, MP_BUFFER_READ);
   mp_int_t font = mp_obj_get_int(args[4]);
   mp_int_t fgcolor = mp_obj_get_int(args[5]);
   mp_int_t bgcolor = mp_obj_get_int(args[6]);
-  mp_int_t minwidth = (n_args > 7) ? mp_obj_get_int(args[7]) : 0;
-  // prefill start
-  int w = display_text_width(text.buf, text.len, font);
-  int barwidth = MAX(w, minwidth);
-  display_bar(x - barwidth, y - 18, barwidth, 23, bgcolor);
-  // prefill end
   display_text_right(x, y, text.buf, text.len, font, fgcolor, bgcolor);
-  return mp_obj_new_int(w);
+  return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_right_obj,
-                                           7, 8,
+                                           7, 7,
                                            mod_trezorui_Display_text_right);
 
-/// def text_width(self, text: str, font: int) -> int:
+/// def text_width(
+///     self,
+///     text: str,
+///     font: int,
+///     text_offset: int | None = None,
+///     text_len: int | None = None,
+/// ) -> int:
 ///     """
 ///     Returns a width of text in pixels. Font font is used for rendering.
+///
+///     Arguments text_offset and text_len can be used to render a substring of
+///     the text.
 ///     """
-STATIC mp_obj_t mod_trezorui_Display_text_width(mp_obj_t self, mp_obj_t text,
-                                                mp_obj_t font) {
-  mp_buffer_info_t txt;
-  mp_get_buffer_raise(text, &txt, MP_BUFFER_READ);
-  mp_int_t f = mp_obj_get_int(font);
-  int w = display_text_width(txt.buf, txt.len, f);
+STATIC mp_obj_t mod_trezorui_Display_text_width(size_t n_args,
+                                                const mp_obj_t *args) {
+  mp_buffer_info_t txt = {0};
+  mp_get_buffer_raise(args[1], &txt, MP_BUFFER_READ);
+  mp_int_t f = mp_obj_get_int(args[2]);
+
+  const char *buf_start = txt.buf;
+  int buf_len = txt.len;
+  if (n_args > 3) {
+    mp_int_t off = mp_obj_get_int(args[3]);
+    mp_int_t len = n_args > 4 ? mp_obj_get_int(args[4]) : txt.len - off;
+    if (off < 0 || off > txt.len) {
+      mp_raise_ValueError("Invalid text_offset");
+    }
+    if (len < 0 || len + off > txt.len) {
+      mp_raise_ValueError("Invalid text_len");
+    }
+    display_utf8_substr(txt.buf, txt.len, off, len, &buf_start, &buf_len);
+  }
+
+  int w = display_text_width(buf_start, buf_len, f);
   return mp_obj_new_int(w);
 }
-STATIC MP_DEFINE_CONST_FUN_OBJ_3(mod_trezorui_Display_text_width_obj,
-                                 mod_trezorui_Display_text_width);
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_width_obj,
+                                           3, 5,
+                                           mod_trezorui_Display_text_width);
+
+/// def text_split(self, text: str, font: int, requested_width: int) -> int:
+///     """
+///     Returns how many characters of the string can be used before exceeding
+///     the requested width. Tries to avoid breaking words if possible. Font
+///     font is used for rendering.
+///     """
+STATIC mp_obj_t mod_trezorui_Display_text_split(size_t n_args,
+                                                const mp_obj_t *args) {
+  mp_buffer_info_t text = {0};
+  mp_get_buffer_raise(args[1], &text, MP_BUFFER_READ);
+  mp_int_t font = mp_obj_get_int(args[2]);
+  mp_int_t requested_width = mp_obj_get_int(args[3]);
+  int chars = display_text_split(text.buf, text.len, font, requested_width);
+  return mp_obj_new_int(chars);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_text_split_obj,
+                                           4, 4,
+                                           mod_trezorui_Display_text_split);
 
 /// def qrcode(self, x: int, y: int, data: bytes, scale: int) -> None:
 ///     """
@@ -429,7 +489,7 @@ STATIC mp_obj_t mod_trezorui_Display_qrcode(size_t n_args,
   if (scale < 1 || scale > 10) {
     mp_raise_ValueError("Scale has to be between 1 and 10");
   }
-  mp_buffer_info_t data;
+  mp_buffer_info_t data = {0};
   mp_get_buffer_raise(args[3], &data, MP_BUFFER_READ);
   if (data.len > 0) {
     display_qrcode(x, y, data.buf, data.len, scale);
@@ -439,7 +499,7 @@ STATIC mp_obj_t mod_trezorui_Display_qrcode(size_t n_args,
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_qrcode_obj, 5,
                                            5, mod_trezorui_Display_qrcode);
 
-/// def orientation(self, degrees: int = None) -> int:
+/// def orientation(self, degrees: int | None = None) -> int:
 ///     """
 ///     Sets display orientation to 0, 90, 180 or 270 degrees.
 ///     Everything needs to be redrawn again when this function is used.
@@ -464,7 +524,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_orientation_obj,
                                            1, 2,
                                            mod_trezorui_Display_orientation);
 
-/// def backlight(self, val: int = None) -> int:
+/// def backlight(self, val: int | None = None) -> int:
 ///     """
 ///     Sets backlight intensity to the value specified in val.
 ///     Call without the val parameter to just perform the read of the value.
@@ -487,17 +547,17 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_backlight_obj,
                                            1, 2,
                                            mod_trezorui_Display_backlight);
 
-/// def offset(self, xy: Tuple[int, int] = None) -> Tuple[int, int]:
+/// def offset(self, xy: tuple[int, int] | None = None) -> tuple[int, int]:
 ///     """
 ///     Sets offset (x, y) for all subsequent drawing calls.
 ///     Call without the xy parameter to just perform the read of the value.
 ///     """
 STATIC mp_obj_t mod_trezorui_Display_offset(size_t n_args,
                                             const mp_obj_t *args) {
-  int xy[2], x, y;
+  int xy[2] = {0}, x = 0, y = 0;
   if (n_args > 1) {
-    size_t xy_cnt;
-    mp_obj_t *xy_obj;
+    size_t xy_cnt = 0;
+    mp_obj_t *xy_obj = NULL;
     if (MP_OBJ_IS_TYPE(args[1], &mp_type_tuple)) {
       mp_obj_tuple_get(args[1], &xy_cnt, &xy_obj);
     } else {
@@ -525,7 +585,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mod_trezorui_Display_offset_obj, 1,
 ///     Saves current display contents to PNG file with given prefix.
 ///     """
 STATIC mp_obj_t mod_trezorui_Display_save(mp_obj_t self, mp_obj_t prefix) {
-  mp_buffer_info_t pfx;
+  mp_buffer_info_t pfx = {0};
   mp_get_buffer_raise(prefix, &pfx, MP_BUFFER_READ);
   if (pfx.len > 0) {
     display_save(pfx.buf);
@@ -535,6 +595,17 @@ STATIC mp_obj_t mod_trezorui_Display_save(mp_obj_t self, mp_obj_t prefix) {
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_trezorui_Display_save_obj,
                                  mod_trezorui_Display_save);
 
+/// def clear_save(self) -> None:
+///     """
+///     Clears buffers in display saving.
+///     """
+STATIC mp_obj_t mod_trezorui_Display_clear_save(mp_obj_t self) {
+  display_clear_save();
+  return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_trezorui_Display_clear_save_obj,
+                                 mod_trezorui_Display_clear_save);
+
 STATIC const mp_rom_map_elem_t mod_trezorui_Display_locals_dict_table[] = {
     {MP_ROM_QSTR(MP_QSTR_clear), MP_ROM_PTR(&mod_trezorui_Display_clear_obj)},
     {MP_ROM_QSTR(MP_QSTR_refresh),
@@ -542,6 +613,8 @@ STATIC const mp_rom_map_elem_t mod_trezorui_Display_locals_dict_table[] = {
     {MP_ROM_QSTR(MP_QSTR_bar), MP_ROM_PTR(&mod_trezorui_Display_bar_obj)},
     {MP_ROM_QSTR(MP_QSTR_bar_radius),
      MP_ROM_PTR(&mod_trezorui_Display_bar_radius_obj)},
+    {MP_ROM_QSTR(MP_QSTR_toif_info),
+     MP_ROM_PTR(&mod_trezorui_Display_toif_info_obj)},
     {MP_ROM_QSTR(MP_QSTR_image), MP_ROM_PTR(&mod_trezorui_Display_image_obj)},
     {MP_ROM_QSTR(MP_QSTR_avatar), MP_ROM_PTR(&mod_trezorui_Display_avatar_obj)},
     {MP_ROM_QSTR(MP_QSTR_icon), MP_ROM_PTR(&mod_trezorui_Display_icon_obj)},
@@ -554,6 +627,8 @@ STATIC const mp_rom_map_elem_t mod_trezorui_Display_locals_dict_table[] = {
      MP_ROM_PTR(&mod_trezorui_Display_text_right_obj)},
     {MP_ROM_QSTR(MP_QSTR_text_width),
      MP_ROM_PTR(&mod_trezorui_Display_text_width_obj)},
+    {MP_ROM_QSTR(MP_QSTR_text_split),
+     MP_ROM_PTR(&mod_trezorui_Display_text_split_obj)},
     {MP_ROM_QSTR(MP_QSTR_qrcode), MP_ROM_PTR(&mod_trezorui_Display_qrcode_obj)},
     {MP_ROM_QSTR(MP_QSTR_orientation),
      MP_ROM_PTR(&mod_trezorui_Display_orientation_obj)},
@@ -561,13 +636,13 @@ STATIC const mp_rom_map_elem_t mod_trezorui_Display_locals_dict_table[] = {
      MP_ROM_PTR(&mod_trezorui_Display_backlight_obj)},
     {MP_ROM_QSTR(MP_QSTR_offset), MP_ROM_PTR(&mod_trezorui_Display_offset_obj)},
     {MP_ROM_QSTR(MP_QSTR_save), MP_ROM_PTR(&mod_trezorui_Display_save_obj)},
+    {MP_ROM_QSTR(MP_QSTR_clear_save),
+     MP_ROM_PTR(&mod_trezorui_Display_clear_save_obj)},
     {MP_ROM_QSTR(MP_QSTR_WIDTH), MP_ROM_INT(DISPLAY_RESX)},
     {MP_ROM_QSTR(MP_QSTR_HEIGHT), MP_ROM_INT(DISPLAY_RESY)},
-    {MP_ROM_QSTR(MP_QSTR_FONT_SIZE), MP_ROM_INT(FONT_SIZE)},
     {MP_ROM_QSTR(MP_QSTR_FONT_NORMAL), MP_ROM_INT(FONT_NORMAL)},
     {MP_ROM_QSTR(MP_QSTR_FONT_BOLD), MP_ROM_INT(FONT_BOLD)},
     {MP_ROM_QSTR(MP_QSTR_FONT_MONO), MP_ROM_INT(FONT_MONO)},
-    {MP_ROM_QSTR(MP_QSTR_FONT_MONO_BOLD), MP_ROM_INT(FONT_MONO_BOLD)},
 };
 STATIC MP_DEFINE_CONST_DICT(mod_trezorui_Display_locals_dict,
                             mod_trezorui_Display_locals_dict_table);

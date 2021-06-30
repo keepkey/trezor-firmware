@@ -20,6 +20,7 @@ import sys
 import time
 from typing import Iterable, Optional
 
+from ..log import DUMP_PACKETS
 from . import TREZORS, UDEV_RULES_STR, TransportException
 from .protocol import ProtocolBasedTransport, ProtocolV1
 
@@ -43,7 +44,7 @@ class WebUsbHandle:
         self.interface = DEBUG_INTERFACE if debug else INTERFACE
         self.endpoint = DEBUG_ENDPOINT if debug else ENDPOINT
         self.count = 0
-        self.handle = None  # type: Optional[usb1.USBDeviceHandle]
+        self.handle: Optional[usb1.USBDeviceHandle] = None
 
     def open(self) -> None:
         self.handle = self.device.open()
@@ -65,6 +66,7 @@ class WebUsbHandle:
         assert self.handle is not None
         if len(chunk) != 64:
             raise TransportException("Unexpected chunk size: %d" % len(chunk))
+        LOG.log(DUMP_PACKETS, "writing packet: {}".format(chunk.hex()))
         self.handle.interruptWrite(self.endpoint, chunk)
 
     def read_chunk(self) -> bytes:
@@ -76,6 +78,7 @@ class WebUsbHandle:
                 break
             else:
                 time.sleep(0.001)
+        LOG.log(DUMP_PACKETS, "read packet: {}".format(chunk.hex()))
         if len(chunk) != 64:
             raise TransportException("Unexpected chunk size: %d" % len(chunk))
         return chunk
@@ -136,14 +139,8 @@ class WebUsbTransport(ProtocolBasedTransport):
         return devices
 
     def find_debug(self) -> "WebUsbTransport":
-        if self.protocol.VERSION >= 2:
-            # TODO test this
-            # XXX this is broken right now because sessions don't really work
-            # For v2 protocol, use the same WebUSB interface with a different session
-            return WebUsbTransport(self.device, self.handle)
-        else:
-            # For v1 protocol, find debug USB interface for the same serial number
-            return WebUsbTransport(self.device, debug=True)
+        # For v1 protocol, find debug USB interface for the same serial number
+        return WebUsbTransport(self.device, debug=True)
 
 
 def is_vendor_class(dev: "usb1.USBDevice") -> bool:

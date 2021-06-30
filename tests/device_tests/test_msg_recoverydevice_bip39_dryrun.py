@@ -16,7 +16,7 @@
 
 import pytest
 
-from trezorlib import device, exceptions, messages, protobuf
+from trezorlib import device, exceptions, messages
 
 from .. import buttons
 from ..common import MNEMONIC12
@@ -49,7 +49,7 @@ def do_recover_core(client, mnemonic, **kwargs):
     def input_flow():
         yield
         layout = client.debug.wait_layout()
-        assert "check the recovery seed" in layout.text
+        assert "check the recovery seed" in layout.text.replace("\n", " ")
         client.debug.click(buttons.OK)
 
         yield
@@ -73,12 +73,15 @@ def do_recover_core(client, mnemonic, **kwargs):
 
         yield
         for word in mnemonic:
+            client.debug.wait_layout()
             client.debug.input(word)
 
         yield
+        client.debug.wait_layout()
         client.debug.click(buttons.OK)
 
     with client:
+        client.watch_layout()
         client.set_input_flow(input_flow)
         return device.recover(client, dry_run=True, **kwargs)
 
@@ -98,16 +101,16 @@ def test_dry_run(client):
 
 @pytest.mark.setup_client(mnemonic=MNEMONIC12)
 def test_seed_mismatch(client):
-    with pytest.raises(exceptions.TrezorFailure) as exc:
+    with pytest.raises(
+        exceptions.TrezorFailure, match="does not match the one in the device"
+    ):
         do_recover(client, ["all"] * 12)
-    assert "does not match the one in the device" in exc.value.failure.message
 
 
 @pytest.mark.skip_t2
 def test_invalid_seed_t1(client):
-    with pytest.raises(exceptions.TrezorFailure) as exc:
+    with pytest.raises(exceptions.TrezorFailure, match="Invalid seed"):
         do_recover(client, ["stick"] * 12)
-    assert "Invalid seed" in exc.value.failure.message
 
 
 @pytest.mark.skip_t1
@@ -115,7 +118,7 @@ def test_invalid_seed_core(client):
     def input_flow():
         yield
         layout = client.debug.wait_layout()
-        assert "check the recovery seed" in layout.text
+        assert "check the recovery seed" in layout.text.replace("\n", " ")
         client.debug.click(buttons.OK)
 
         yield
@@ -136,11 +139,13 @@ def test_invalid_seed_core(client):
 
         yield
         for _ in range(12):
+            layout = client.debug.wait_layout()
+            assert layout.text == "Bip39Keyboard"
             client.debug.input("stick")
 
-        code = yield
+        br = yield
         layout = client.debug.wait_layout()
-        assert code == messages.ButtonRequestType.Warning
+        assert br.code == messages.ButtonRequestType.Warning
         assert "invalid recovery seed" in layout.text
         client.debug.click(buttons.OK)
 
@@ -156,6 +161,7 @@ def test_invalid_seed_core(client):
         client.debug.click(buttons.OK)
 
     with client:
+        client.watch_layout()
         client.set_input_flow(input_flow)
         with pytest.raises(exceptions.Cancelled):
             return device.recover(client, dry_run=True)
@@ -163,9 +169,8 @@ def test_invalid_seed_core(client):
 
 @pytest.mark.setup_client(uninitialized=True)
 def test_uninitialized(client):
-    with pytest.raises(exceptions.TrezorFailure) as exc:
+    with pytest.raises(exceptions.TrezorFailure, match="not initialized"):
         do_recover(client, ["all"] * 12)
-    assert "not initialized" in exc.value.failure.message
 
 
 DRY_RUN_ALLOWED_FIELDS = ("dry_run", "word_count", "enforce_wordlist", "type")
@@ -175,16 +180,16 @@ def _make_bad_params():
     """Generate a list of field names that must NOT be set on a dry-run message,
     and default values of the appropriate type.
     """
-    for fname, ftype, _ in messages.RecoveryDevice.get_fields().values():
-        if fname in DRY_RUN_ALLOWED_FIELDS:
+    for field in messages.RecoveryDevice.FIELDS.values():
+        if field.name in DRY_RUN_ALLOWED_FIELDS:
             continue
 
-        if ftype is protobuf.UVarintType:
-            yield fname, 1
-        elif ftype is protobuf.BoolType:
-            yield fname, True
-        elif ftype is protobuf.UnicodeType:
-            yield fname, "test"
+        if "int" in field.type:
+            yield field.name, 1
+        elif field.type == "bool":
+            yield field.name, True
+        elif field.type == "string":
+            yield field.name, "test"
         else:
             # Someone added a field to RecoveryDevice of a type that has no assigned
             # default value. This test must be fixed.
@@ -200,6 +205,7 @@ def test_bad_parameters(client, field_name, field_value):
         type=messages.RecoveryDeviceType.ScrambledWords,
     )
     setattr(msg, field_name, field_value)
-    with pytest.raises(exceptions.TrezorFailure) as exc:
+    with pytest.raises(
+        exceptions.TrezorFailure, match="Forbidden field set in dry-run"
+    ):
         client.call(msg)
-    assert "Forbidden field set in dry-run" in exc.value.failure.message

@@ -13,9 +13,9 @@ class HDNode:
         fingerprint: int,
         child_num: int,
         chain_code: bytes,
-        private_key: bytes = None,
-        public_key: bytes = None,
-        curve_name: str = None,
+        private_key: bytes | None = None,
+        public_key: bytes | None = None,
+        curve_name: str | None = None,
     ) -> None:
         """
         """
@@ -30,7 +30,7 @@ class HDNode:
         Derive a BIP0032 child node in place using Cardano algorithm.
         """
 
-    def derive_path(self, path: List[int]) -> None:
+    def derive_path(self, path: Sequence[int]) -> None:
         """
         Go through a list of indexes and iteratively derive a child node in
         place.
@@ -39,11 +39,6 @@ class HDNode:
     def serialize_public(self, version: int) -> str:
         """
         Serialize the public info from HD node to base58 string.
-        """
-
-    def serialize_private(self, version: int) -> str:
-        """
-        Serialize the private info HD node to base58 string.
         """
 
     def clone(self) -> HDNode:
@@ -115,15 +110,6 @@ class HDNode:
 
 
 # extmod/modtrezorcrypto/modtrezorcrypto-bip32.h
-def deserialize(
-    value: str, version_public: int, version_private: int
-) -> HDNode:
-    """
-    Construct a BIP0032 HD node from a base58-serialized value.
-    """
-
-
-# extmod/modtrezorcrypto/modtrezorcrypto-bip32.h
 def from_seed(seed: bytes, curve_name: str) -> HDNode:
     """
     Construct a BIP0032 HD node from a BIP0039 seed value.
@@ -131,7 +117,7 @@ def from_seed(seed: bytes, curve_name: str) -> HDNode:
 
 
 # extmod/modtrezorcrypto/modtrezorcrypto-bip32.h
-def from_mnemonic_cardano(mnemonic: str, passphrase: str) -> bytes:
+def from_mnemonic_cardano(mnemonic: str, passphrase: str) -> HDNode:
     """
     Construct a HD node from a BIP-0039 mnemonic using the Icarus derivation
     scheme, aka v2 derivation scheme.

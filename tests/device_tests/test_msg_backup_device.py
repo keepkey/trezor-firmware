@@ -27,6 +27,7 @@ from ..common import (
     MNEMONIC_SLIP39_ADVANCED_20,
     MNEMONIC_SLIP39_BASIC_20_3of6,
     click_through,
+    paging_responses,
     read_and_confirm_mnemonic,
 )
 
@@ -36,13 +37,15 @@ from ..common import (
 def test_backup_bip39(client):
     assert client.features.needs_backup is True
     mnemonic = None
+    words = 12
+    mnemonic_pages = ((words + 3) // 4) + 1
 
     def input_flow():
         nonlocal mnemonic
         yield  # Confirm Backup
         client.debug.press_yes()
-        yield  # Mnemonic phrases
-        mnemonic = read_and_confirm_mnemonic(client.debug, words=12)
+        # Mnemonic phrases
+        mnemonic = yield from read_and_confirm_mnemonic(client.debug)
         yield  # Confirm success
         client.debug.press_yes()
         yield  # Backup is done
@@ -53,10 +56,13 @@ def test_backup_bip39(client):
         client.set_expected_responses(
             [
                 messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
+            ]
+            + paging_responses(mnemonic_pages, code=B.ResetDevice)
+            + [
                 messages.ButtonRequest(code=B.Success),
                 messages.ButtonRequest(code=B.Success),
-                messages.Success(),
+                messages.Success,
+                messages.Features,
             ]
         )
         device.backup(client)
@@ -75,6 +81,8 @@ def test_backup_bip39(client):
 def test_backup_slip39_basic(client):
     assert client.features.needs_backup is True
     mnemonics = []
+    words = 20
+    mnemonic_pages = ((words + 3) // 4) + 1
 
     def input_flow():
         # 1. Checklist
@@ -87,8 +95,8 @@ def test_backup_slip39_basic(client):
 
         # Mnemonic phrases
         for _ in range(5):
-            yield  # Phrase screen
-            mnemonic = read_and_confirm_mnemonic(client.debug, words=20)
+            # Phrase screen
+            mnemonic = yield from read_and_confirm_mnemonic(client.debug)
             mnemonics.append(mnemonic)
             yield  # Confirm continue to next
             client.debug.press_yes()
@@ -100,25 +108,16 @@ def test_backup_slip39_basic(client):
     with client:
         client.set_input_flow(input_flow)
         client.set_expected_responses(
-            [
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
+            [messages.ButtonRequest(code=B.ResetDevice)] * 6  # intro screens
+            + [
+                *paging_responses(mnemonic_pages, code=B.ResetDevice),
                 messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
+            ]
+            * 5  # individual shares
+            + [
                 messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.Success),
-                messages.Success(),
+                messages.Success,
+                messages.Features,
             ]
         )
         device.backup(client)
@@ -140,6 +139,8 @@ def test_backup_slip39_basic(client):
 def test_backup_slip39_advanced(client):
     assert client.features.needs_backup is True
     mnemonics = []
+    words = 20
+    mnemonic_pages = ((words + 3) // 4) + 1
 
     def input_flow():
         # 1. Checklist
@@ -156,8 +157,8 @@ def test_backup_slip39_advanced(client):
         # Mnemonic phrases
         for _ in range(5):
             for _ in range(5):
-                yield  # Phrase screen
-                mnemonic = read_and_confirm_mnemonic(client.debug, words=20)
+                # Phrase screen
+                mnemonic = yield from read_and_confirm_mnemonic(client.debug)
                 mnemonics.append(mnemonic)
                 yield  # Confirm continue to next
                 client.debug.press_yes()
@@ -169,75 +170,21 @@ def test_backup_slip39_advanced(client):
     with client:
         client.set_input_flow(input_flow)
         client.set_expected_responses(
-            [
+            [messages.ButtonRequest(code=B.ResetDevice)] * 6  # intro screens
+            + [
                 messages.ButtonRequest(code=B.ResetDevice),
                 messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),  # group #1 counts
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),  # group #2 counts
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),  # group #3 counts
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),  # group #4 counts
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),  # group #5 counts
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),  # show seeds
+            ]
+            * 5  # group thresholds
+            + [
+                *paging_responses(mnemonic_pages, code=B.ResetDevice),
                 messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
+            ]
+            * 25  # individual shares
+            + [
                 messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),
-                messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.Success),  # show seeds ends here
-                messages.ButtonRequest(code=B.Success),
-                messages.Success(),
+                messages.Success,
+                messages.Features,
             ]
         )
         device.backup(client)
@@ -259,6 +206,7 @@ def test_backup_slip39_advanced(client):
 # we only test this with bip39 because the code path is always the same
 @pytest.mark.setup_client(no_backup=True)
 def test_no_backup_fails(client):
+    client.ensure_unlocked()
     assert client.features.initialized is True
     assert client.features.no_backup is True
     assert client.features.needs_backup is False
@@ -271,6 +219,7 @@ def test_no_backup_fails(client):
 # we only test this with bip39 because the code path is always the same
 @pytest.mark.setup_client(needs_backup=True)
 def test_interrupt_backup_fails(client):
+    client.ensure_unlocked()
     assert client.features.initialized is True
     assert client.features.needs_backup is True
     assert client.features.unfinished_backup is False

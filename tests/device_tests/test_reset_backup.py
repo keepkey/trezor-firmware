@@ -15,17 +15,26 @@
 # If not, see <https://www.gnu.org/licenses/lgpl-3.0.html>.
 
 
+from unittest import mock
+
 import pytest
-import shamir_mnemonic as shamir
+from shamir_mnemonic import shamir
 
 from trezorlib import device, messages
 from trezorlib.messages import BackupType, ButtonRequestType as B
 
-from ..common import click_through, read_and_confirm_mnemonic
+from ..common import (
+    EXTERNAL_ENTROPY,
+    click_through,
+    paging_responses,
+    read_and_confirm_mnemonic,
+)
 
 
 def backup_flow_bip39(client):
     mnemonic = None
+    words = 12
+    mnemonic_pages = ((words + 3) // 4) + 1
 
     def input_flow():
         nonlocal mnemonic
@@ -34,28 +43,29 @@ def backup_flow_bip39(client):
         yield from click_through(client.debug, screens=1, code=B.ResetDevice)
 
         # mnemonic phrases
-        btn_code = yield
-        assert btn_code == B.ResetDevice
-        mnemonic = read_and_confirm_mnemonic(client.debug, words=12)
+        mnemonic = yield from read_and_confirm_mnemonic(client.debug)
 
         # confirm recovery seed check
-        btn_code = yield
-        assert btn_code == B.Success
+        br = yield
+        assert br.code == B.Success
         client.debug.press_yes()
 
         # confirm success
-        btn_code = yield
-        assert btn_code == B.Success
+        br = yield
+        assert br.code == B.Success
         client.debug.press_yes()
 
     with client:
         client.set_expected_responses(
             [
                 messages.ButtonRequest(code=B.ResetDevice),
-                messages.ButtonRequest(code=B.ResetDevice),
+            ]
+            + paging_responses(mnemonic_pages, code=B.ResetDevice)
+            + [
                 messages.ButtonRequest(code=B.Success),
                 messages.ButtonRequest(code=B.Success),
-                messages.Success(),
+                messages.Success,
+                messages.Features,
             ]
         )
         client.set_input_flow(input_flow)
@@ -66,6 +76,8 @@ def backup_flow_bip39(client):
 
 def backup_flow_slip39_basic(client):
     mnemonics = []
+    words = 20
+    mnemonic_pages = ((words + 3) // 4) + 1
 
     def input_flow():
         # 1. Checklist
@@ -78,8 +90,8 @@ def backup_flow_slip39_basic(client):
 
         # Mnemonic phrases
         for _ in range(5):
-            yield  # Phrase screen
-            mnemonic = read_and_confirm_mnemonic(client.debug, words=20)
+            # Phrase screen
+            mnemonic = yield from read_and_confirm_mnemonic(client.debug)
             mnemonics.append(mnemonic)
             yield  # Confirm continue to next
             client.debug.press_yes()
@@ -93,23 +105,27 @@ def backup_flow_slip39_basic(client):
         client.set_expected_responses(
             [messages.ButtonRequest(code=B.ResetDevice)] * 6  # intro screens
             + [
-                messages.ButtonRequest(code=B.ResetDevice),
+                *paging_responses(mnemonic_pages, code=B.ResetDevice),
                 messages.ButtonRequest(code=B.Success),
             ]
             * 5  # individual shares
-            + [messages.ButtonRequest(code=B.Success), messages.Success()]
+            + [
+                messages.ButtonRequest(code=B.Success),
+                messages.Success,
+                messages.Features,
+            ]
         )
         device.backup(client)
 
-    mnemonics = mnemonics[:3]
-    ms = shamir.combine_mnemonics(mnemonics)
-    identifier, iteration_exponent, _, _, _ = shamir._decode_mnemonics(mnemonics)
-    secret = shamir._encrypt(ms, b"", iteration_exponent, identifier)
-    return secret
+    groups = shamir.decode_mnemonics(mnemonics[:3])
+    ems = shamir.recover_ems(groups)
+    return ems.ciphertext
 
 
 def backup_flow_slip39_advanced(client):
     mnemonics = []
+    words = 20
+    mnemonic_pages = ((words + 3) // 4) + 1
 
     def input_flow():
         # 1. Confirm Reset
@@ -127,19 +143,17 @@ def backup_flow_slip39_advanced(client):
         for _ in range(5):
             for _ in range(5):
                 # mnemonic phrases
-                btn_code = yield
-                assert btn_code == B.ResetDevice
-                mnemonic = read_and_confirm_mnemonic(client.debug, words=20)
+                mnemonic = yield from read_and_confirm_mnemonic(client.debug)
                 mnemonics.append(mnemonic)
 
                 # Confirm continue to next share
-                btn_code = yield
-                assert btn_code == B.Success
+                br = yield
+                assert br.code == B.Success
                 client.debug.press_yes()
 
         # safety warning
-        btn_code = yield
-        assert btn_code == B.Success
+        br = yield
+        assert br.code == B.Success
         client.debug.press_yes()
 
     with client:
@@ -152,19 +166,22 @@ def backup_flow_slip39_advanced(client):
             ]
             * 5  # group thresholds
             + [
-                messages.ButtonRequest(code=B.ResetDevice),
+                *paging_responses(mnemonic_pages, code=B.ResetDevice),
                 messages.ButtonRequest(code=B.Success),
             ]
             * 25  # individual shares
-            + [messages.ButtonRequest(code=B.Success), messages.Success()]
+            + [
+                messages.ButtonRequest(code=B.Success),
+                messages.Success,
+                messages.Features,
+            ]
         )
         device.backup(client)
 
     mnemonics = mnemonics[0:3] + mnemonics[5:8] + mnemonics[10:13]
-    ms = shamir.combine_mnemonics(mnemonics)
-    identifier, iteration_exponent, _, _, _ = shamir._decode_mnemonics(mnemonics)
-    secret = shamir._encrypt(ms, b"", iteration_exponent, identifier)
-    return secret
+    groups = shamir.decode_mnemonics(mnemonics)
+    ems = shamir.recover_ems(groups)
+    return ems.ciphertext
 
 
 VECTORS = [
@@ -178,13 +195,16 @@ VECTORS = [
 @pytest.mark.parametrize("backup_type, backup_flow", VECTORS)
 @pytest.mark.setup_client(uninitialized=True)
 def test_skip_backup_msg(client, backup_type, backup_flow):
-    device.reset(
-        client,
-        skip_backup=True,
-        passphrase_protection=False,
-        pin_protection=False,
-        backup_type=backup_type,
-    )
+
+    os_urandom = mock.Mock(return_value=EXTERNAL_ENTROPY)
+    with mock.patch("os.urandom", os_urandom), client:
+        device.reset(
+            client,
+            skip_backup=True,
+            passphrase_protection=False,
+            pin_protection=False,
+            backup_type=backup_type,
+        )
 
     assert client.features.initialized is True
     assert client.features.needs_backup is True
@@ -220,7 +240,8 @@ def test_skip_backup_manual(client, backup_type, backup_flow):
         yield  # Confirm skip backup
         client.debug.press_no()
 
-    with client:
+    os_urandom = mock.Mock(return_value=EXTERNAL_ENTROPY)
+    with mock.patch("os.urandom", os_urandom), client:
         client.set_input_flow(reset_skip_input_flow)
         client.set_expected_responses(
             [
@@ -228,8 +249,8 @@ def test_skip_backup_manual(client, backup_type, backup_flow):
                 messages.EntropyRequest(),
                 messages.ButtonRequest(code=B.ResetDevice),
                 messages.ButtonRequest(code=B.ResetDevice),
-                messages.Success(),
-                messages.Features(),
+                messages.Success,
+                messages.Features,
             ]
         )
         device.reset(

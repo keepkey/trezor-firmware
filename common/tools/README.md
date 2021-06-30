@@ -85,6 +85,15 @@ See docstrings for the most important functions: `coin_info()` and `support_info
 The file `coindef.py` is a protobuf definition for passing coin data to Trezor
 from the outside.
 
+### `marketcap.py`
+
+Module for obtaining market cap and price data used by `coins_details.py` and `maxfee.py`.
+
+### `maxfee.py`
+
+Updates the `maxfee_kb` coin property based on a specified maximum per-transaction fee. The command
+fetches current price data from https://coinmarketcap.com/ to convert from fiat-denominated maximum
+fee.
 
 # Release Workflow
 
@@ -104,14 +113,14 @@ misc:ONT - Ontology (ONT)
  * connect : NO
  * trezor1 : support info missing
  * trezor2 : support info missing
- * webwallet : NO
+ * suite : NO
 
 $ ./support.py set misc:ONT trezor1=no -r "not planned on T1" trezor2=soon
 misc:ONT - Ontology (ONT)
  * connect : NO
  * trezor1 : NO (reason: not planned on T1)
  * trezor2 : SOON
- * webwallet : NO
+ * suite : NO
 ```
 
 Afterwards, review and commit changes to `defs/support.json`, and update the `trezor-common`
