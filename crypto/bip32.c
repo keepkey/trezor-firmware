@@ -113,6 +113,10 @@ const curve_info curve25519_info = {
     .hasher_script = HASHER_SHA2,
 };
 
+bool hdnode_is_valid(const HDNode* node) {
+  return node && node->curve;
+}
+
 int hdnode_from_xpub(uint32_t depth, uint32_t child_num,
                      const uint8_t *chain_code, const uint8_t *public_key,
                      const char *curve, HDNode *out) {
@@ -206,6 +210,8 @@ int hdnode_from_seed(const uint8_t *seed, int seed_len, const char *curve,
 }
 
 uint32_t hdnode_fingerprint(HDNode *node) {
+  if (!hdnode_is_valid(node)) return 0;
+
   uint8_t digest[32] = {0};
   uint32_t fingerprint = 0;
 
@@ -218,6 +224,8 @@ uint32_t hdnode_fingerprint(HDNode *node) {
 }
 
 int hdnode_private_ckd(HDNode *inout, uint32_t i) {
+  if (!hdnode_is_valid(inout)) return 0;
+
   static CONFIDENTIAL uint8_t data[1 + 32 + 4];
   static CONFIDENTIAL uint8_t I[32 + 32];
   static CONFIDENTIAL bignum256 a, b;
@@ -304,6 +312,8 @@ static void scalar_add_256bits(const uint8_t *src1, const uint8_t *src2,
 }
 
 int hdnode_private_ckd_cardano(HDNode *inout, uint32_t index) {
+  if (!hdnode_is_valid(inout)) return 0;
+
   if (inout->depth >= CARDANO_MAX_NODE_DEPTH) {
     return 0;
   }
@@ -473,6 +483,8 @@ int hdnode_public_ckd_cp(const ecdsa_curve *curve, const curve_point *parent,
 }
 
 int hdnode_public_ckd(HDNode *inout, uint32_t i) {
+  if (!hdnode_is_valid(inout)) return 0;
+
   curve_point parent = {0}, child = {0};
 
   if (!ecdsa_read_pubkey(inout->curve->params, inout->public_key, &parent)) {
@@ -534,6 +546,8 @@ static CONFIDENTIAL struct {
 
 int hdnode_private_ckd_cached(HDNode *inout, const uint32_t *i, size_t i_count,
                               uint32_t *fingerprint) {
+  if (!hdnode_is_valid(inout)) return 1;
+
   if (i_count == 0) {
     // no way how to compute parent fingerprint
     return 1;
@@ -600,6 +614,8 @@ int hdnode_private_ckd_cached(HDNode *inout, const uint32_t *i, size_t i_count,
 #endif
 
 void hdnode_get_address_raw(HDNode *node, uint32_t version, uint8_t *addr_raw) {
+  if (!hdnode_is_valid(node)) return;
+
   hdnode_fill_public_key(node);
   ecdsa_get_address_raw(node->public_key, version, node->curve->hasher_pubkey,
                         addr_raw);
@@ -607,12 +623,16 @@ void hdnode_get_address_raw(HDNode *node, uint32_t version, uint8_t *addr_raw) {
 
 void hdnode_get_address(HDNode *node, uint32_t version, char *addr,
                         int addrsize) {
+  if (!hdnode_is_valid(node)) return;
+
   hdnode_fill_public_key(node);
   ecdsa_get_address(node->public_key, version, node->curve->hasher_pubkey,
                     node->curve->hasher_base58, addr, addrsize);
 }
 
 void hdnode_fill_public_key(HDNode *node) {
+  if (!hdnode_is_valid(node)) return;
+
   if (node->public_key[0] != 0) return;
 
 #if USE_BIP32_25519_CURVES
@@ -651,6 +671,8 @@ void hdnode_fill_public_key(HDNode *node) {
 
 #if USE_ETHEREUM
 int hdnode_get_ethereum_pubkeyhash(const HDNode *node, uint8_t *pubkeyhash) {
+  if (!hdnode_is_valid(node)) return 0;
+
   uint8_t buf[65] = {0};
   SHA3_CTX ctx = {0};
 
@@ -671,6 +693,8 @@ int hdnode_get_ethereum_pubkeyhash(const HDNode *node, uint8_t *pubkeyhash) {
 
 #if USE_NEM
 int hdnode_get_nem_address(HDNode *node, uint8_t version, char *address) {
+  if (!hdnode_is_valid(node)) return 0;
+
   if (node->curve != &ed25519_keccak_info) {
     return 0;
   }
@@ -683,6 +707,8 @@ int hdnode_get_nem_shared_key(const HDNode *node,
                               const ed25519_public_key peer_public_key,
                               const uint8_t *salt, ed25519_public_key mul,
                               uint8_t *shared_key) {
+  if (!hdnode_is_valid(node)) return 0;
+
   if (node->curve != &ed25519_keccak_info) {
     return 0;
   }
@@ -705,6 +731,8 @@ int hdnode_get_nem_shared_key(const HDNode *node,
 int hdnode_nem_encrypt(const HDNode *node, const ed25519_public_key public_key,
                        const uint8_t *iv_immut, const uint8_t *salt,
                        const uint8_t *payload, size_t size, uint8_t *buffer) {
+  if (!hdnode_is_valid(node)) return 0;
+
   uint8_t last_block[AES_BLOCK_SIZE] = {0};
   uint8_t remainder = size % AES_BLOCK_SIZE;
 
@@ -749,6 +777,8 @@ int hdnode_nem_encrypt(const HDNode *node, const ed25519_public_key public_key,
 int hdnode_nem_decrypt(const HDNode *node, const ed25519_public_key public_key,
                        uint8_t *iv, const uint8_t *salt, const uint8_t *payload,
                        size_t size, uint8_t *buffer) {
+  if (!hdnode_is_valid(node)) return 0;
+
   uint8_t shared_key[SHA3_256_DIGEST_LENGTH] = {0};
 
   if (!hdnode_get_nem_shared_key(node, public_key, salt, NULL, shared_key)) {
@@ -777,6 +807,8 @@ int hdnode_nem_decrypt(const HDNode *node, const ed25519_public_key public_key,
 int hdnode_sign(HDNode *node, const uint8_t *msg, uint32_t msg_len,
                 HasherType hasher_sign, uint8_t *sig, uint8_t *pby,
                 int (*is_canonical)(uint8_t by, uint8_t sig[64])) {
+  if (!hdnode_is_valid(node)) return 1;
+
   if (node->curve->params) {
     return ecdsa_sign(node->curve->params, hasher_sign, node->private_key, msg,
                       msg_len, sig, pby, is_canonical);
@@ -810,6 +842,8 @@ int hdnode_sign(HDNode *node, const uint8_t *msg, uint32_t msg_len,
 int hdnode_sign_digest(HDNode *node, const uint8_t *digest, uint8_t *sig,
                        uint8_t *pby,
                        int (*is_canonical)(uint8_t by, uint8_t sig[64])) {
+  if (!hdnode_is_valid(node)) return 1;
+
   if (node->curve->params) {
     return ecdsa_sign_digest(node->curve->params, node->private_key, digest,
                              sig, pby, is_canonical);
@@ -822,6 +856,8 @@ int hdnode_sign_digest(HDNode *node, const uint8_t *digest, uint8_t *sig,
 
 int hdnode_get_shared_key(const HDNode *node, const uint8_t *peer_public_key,
                           uint8_t *session_key, int *result_size) {
+  if (!hdnode_is_valid(node)) return 1;
+
   // Use elliptic curve Diffie-Helman to compute shared session key
   if (node->curve->params) {
     if (ecdh_multiply(node->curve->params, node->private_key, peer_public_key,
@@ -848,6 +884,8 @@ int hdnode_get_shared_key(const HDNode *node, const uint8_t *peer_public_key,
 static int hdnode_serialize(const HDNode *node, uint32_t fingerprint,
                             uint32_t version, bool use_private, char *str,
                             int strsize) {
+  if (!hdnode_is_valid(node)) return 0;
+
   uint8_t node_data[78] = {0};
   write_be(node_data, version);
   node_data[4] = node->depth;
@@ -880,6 +918,8 @@ int hdnode_serialize_private(const HDNode *node, uint32_t fingerprint,
 static int hdnode_deserialize(const char *str, uint32_t version,
                               bool use_private, const char *curve, HDNode *node,
                               uint32_t *fingerprint) {
+  if (!hdnode_is_valid(node)) return -1;
+
   uint8_t node_data[78] = {0};
   memzero(node, sizeof(HDNode));
   node->curve = get_curve_by_name(curve);
