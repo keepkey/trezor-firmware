@@ -94,48 +94,51 @@ static int sinsemilla_incomplete_add(const curve_point *a, const curve_point *b,
   return 0;
 }
 
-static int bit_from_commit_msg(const uint8_t ak[32], const uint8_t nk[32],
-                               size_t bit) {
-  const uint8_t *src = ak;
-  if (bit >= 255) {
-    src = nk;
-    bit -= 255;
-  }
-  return (src[bit / 8] >> (bit % 8)) & 1;
+static int bit_from_msg(const uint8_t *msg, size_t bit) {
+  return (msg[bit / 8] >> (bit % 8)) & 1;
 }
 
-static uint32_t sinsemilla_word(const uint8_t ak[32], const uint8_t nk[32],
+static uint32_t sinsemilla_word(const uint8_t *msg, size_t msg_bits,
                                 size_t word_idx) {
   uint32_t word = 0;
-  for (size_t i = 0; i < 10; i++) {
-    size_t bit = word_idx * 10 + i;
-    if (bit_from_commit_msg(ak, nk, bit)) {
+  for (size_t i = 0; i < PALLAS_SINSEMILLA_K; i++) {
+    size_t bit = word_idx * PALLAS_SINSEMILLA_K + i;
+    if (bit < msg_bits && bit_from_msg(msg, bit)) {
       word |= (uint32_t)1 << i;
     }
   }
   return word;
 }
 
-int pallas_sinsemilla_commit_ivk(const uint8_t ak[32], const uint8_t nk[32],
-                                 const uint8_t rivk[32],
-                                 uint8_t ivk_out[32]) {
-  if (!ak || !nk || !rivk || !ivk_out) return -1;
+static void set_msg_bit(uint8_t *msg, size_t bit) {
+  msg[bit / 8] |= (uint8_t)(1u << (bit % 8));
+}
 
-  bignum256 ak_field, nk_field, rivk_scalar;
-  if (read_base_field(ak, &ak_field) != 0 ||
-      read_base_field(nk, &nk_field) != 0 ||
-      read_scalar_field(rivk, &rivk_scalar) != 0) {
-    memzero(&ak_field, sizeof(ak_field));
-    memzero(&nk_field, sizeof(nk_field));
-    memzero(&rivk_scalar, sizeof(rivk_scalar));
-    return -1;
+static void pack_commit_ivk_msg(const uint8_t ak[32], const uint8_t nk[32],
+                                uint8_t msg[64]) {
+  memset(msg, 0, 64);
+  for (size_t bit = 0; bit < 255; bit++) {
+    if (bit_from_msg(ak, bit)) {
+      set_msg_bit(msg, bit);
+    }
+    if (bit_from_msg(nk, bit)) {
+      set_msg_bit(msg, 255 + bit);
+    }
   }
+}
 
-  curve_point acc;
-  point_from_xy_le(COMMIT_IVK_Q_X, COMMIT_IVK_Q_Y, &acc);
+int pallas_sinsemilla_hash_to_point(const curve_point *q, const uint8_t *msg,
+                                    size_t msg_bits, curve_point *out) {
+  if (!q || (!msg && msg_bits != 0) || !out) return -1;
+  if (msg_bits > PALLAS_SINSEMILLA_MAX_BITS) return -1;
+  if (pallas_point_is_identity(q)) return -1;
 
-  for (size_t i = 0; i < 51; i++) {
-    uint32_t word = sinsemilla_word(ak, nk, i);
+  curve_point acc = *q;
+  size_t word_count =
+      (msg_bits + PALLAS_SINSEMILLA_K - 1) / PALLAS_SINSEMILLA_K;
+
+  for (size_t i = 0; i < word_count; i++) {
+    uint32_t word = sinsemilla_word(msg, msg_bits, i);
     curve_point s, old_acc, tmp;
     point_from_xy_le(SINSEMILLA_S_BYTES[word][0],
                      SINSEMILLA_S_BYTES[word][1], &s);
@@ -143,9 +146,6 @@ int pallas_sinsemilla_commit_ivk(const uint8_t ak[32], const uint8_t nk[32],
 
     if (sinsemilla_incomplete_add(&old_acc, &s, &tmp) != 0 ||
         sinsemilla_incomplete_add(&tmp, &old_acc, &acc) != 0) {
-      memzero(&ak_field, sizeof(ak_field));
-      memzero(&nk_field, sizeof(nk_field));
-      memzero(&rivk_scalar, sizeof(rivk_scalar));
       memzero(&acc, sizeof(acc));
       memzero(&s, sizeof(s));
       memzero(&old_acc, sizeof(old_acc));
@@ -158,22 +158,102 @@ int pallas_sinsemilla_commit_ivk(const uint8_t ak[32], const uint8_t nk[32],
     memzero(&tmp, sizeof(tmp));
   }
 
-  curve_point r, blind, commit;
-  point_from_xy_le(COMMIT_IVK_R_X, COMMIT_IVK_R_Y, &r);
-  pallas_point_mult(&rivk_scalar, &r, &blind);
-  pallas_point_add(&acc, &blind, &commit);
+  *out = acc;
+  memzero(&acc, sizeof(acc));
+  return 0;
+}
+
+int pallas_sinsemilla_hash(const curve_point *q, const uint8_t *msg,
+                           size_t msg_bits, uint8_t hash_out[32]) {
+  if (!hash_out) return -1;
+
+  curve_point hash_point;
+  if (pallas_sinsemilla_hash_to_point(q, msg, msg_bits, &hash_point) != 0) {
+    return -1;
+  }
+
+  bignum256 x;
+  bn_copy(&hash_point.x, &x);
+  bn_write_le(&x, hash_out);
+
+  memzero(&hash_point, sizeof(hash_point));
+  memzero(&x, sizeof(x));
+  return 0;
+}
+
+int pallas_sinsemilla_commit(const curve_point *q, const curve_point *r,
+                             const uint8_t *msg, size_t msg_bits,
+                             const uint8_t blind[32], curve_point *out) {
+  if (!r || !blind || !out) return -1;
+  if (pallas_point_is_identity(r)) return -1;
+
+  bignum256 blind_scalar;
+  if (read_scalar_field(blind, &blind_scalar) != 0) {
+    memzero(&blind_scalar, sizeof(blind_scalar));
+    return -1;
+  }
+
+  curve_point hash_point, blind_point, commit;
+  if (pallas_sinsemilla_hash_to_point(q, msg, msg_bits, &hash_point) != 0) {
+    memzero(&blind_scalar, sizeof(blind_scalar));
+    return -1;
+  }
+
+  pallas_point_mult(&blind_scalar, r, &blind_point);
+  pallas_point_add(&hash_point, &blind_point, &commit);
+  *out = commit;
+
+  memzero(&blind_scalar, sizeof(blind_scalar));
+  memzero(&hash_point, sizeof(hash_point));
+  memzero(&blind_point, sizeof(blind_point));
+  memzero(&commit, sizeof(commit));
+  return 0;
+}
+
+int pallas_sinsemilla_short_commit(const curve_point *q, const curve_point *r,
+                                   const uint8_t *msg, size_t msg_bits,
+                                   const uint8_t blind[32],
+                                   uint8_t out[32]) {
+  if (!out) return -1;
+
+  curve_point commit;
+  if (pallas_sinsemilla_commit(q, r, msg, msg_bits, blind, &commit) != 0) {
+    return -1;
+  }
 
   bignum256 x;
   bn_copy(&commit.x, &x);
-  bn_write_le(&x, ivk_out);
+  bn_write_le(&x, out);
 
-  memzero(&ak_field, sizeof(ak_field));
-  memzero(&nk_field, sizeof(nk_field));
-  memzero(&rivk_scalar, sizeof(rivk_scalar));
-  memzero(&acc, sizeof(acc));
-  memzero(&r, sizeof(r));
-  memzero(&blind, sizeof(blind));
   memzero(&commit, sizeof(commit));
   memzero(&x, sizeof(x));
   return 0;
+}
+
+int pallas_sinsemilla_commit_ivk(const uint8_t ak[32], const uint8_t nk[32],
+                                 const uint8_t rivk[32],
+                                 uint8_t ivk_out[32]) {
+  if (!ak || !nk || !rivk || !ivk_out) return -1;
+
+  bignum256 ak_field, nk_field;
+  if (read_base_field(ak, &ak_field) != 0 ||
+      read_base_field(nk, &nk_field) != 0) {
+    memzero(&ak_field, sizeof(ak_field));
+    memzero(&nk_field, sizeof(nk_field));
+    return -1;
+  }
+
+  uint8_t msg[64];
+  curve_point q, r;
+  pack_commit_ivk_msg(ak, nk, msg);
+  point_from_xy_le(COMMIT_IVK_Q_X, COMMIT_IVK_Q_Y, &q);
+  point_from_xy_le(COMMIT_IVK_R_X, COMMIT_IVK_R_Y, &r);
+  int ret = pallas_sinsemilla_short_commit(&q, &r, msg, 510, rivk, ivk_out);
+
+  memzero(&ak_field, sizeof(ak_field));
+  memzero(&nk_field, sizeof(nk_field));
+  memzero(msg, sizeof(msg));
+  memzero(&q, sizeof(q));
+  memzero(&r, sizeof(r));
+  return ret;
 }
