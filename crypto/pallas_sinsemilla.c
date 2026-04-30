@@ -7,8 +7,9 @@
  *   Commit^ivk.Output = SinsemillaShortCommit(
  *       "z.cash:Orchard-CommitIvk", ak || nk, rivk)
  *
- * The S generator table is generated from sinsemilla 0.1.0's SINSEMILLA_S
- * constants as canonical little-endian Pallas base-field encodings.
+ * S generators are derived on demand with the upstream
+ * "z.cash:SinsemillaS" hash-to-curve personalization. This keeps firmware
+ * ROM usage low by avoiding the 64 KiB precomputed generator table.
  */
 
 #include "pallas_sinsemilla.h"
@@ -19,6 +20,7 @@
 #include "bignum.h"
 #include "memzero.h"
 #include "pallas.h"
+#include "pallas_swu.h"
 
 static const uint8_t COMMIT_IVK_Q_X[32] = {
     0xf2, 0x82, 0x0f, 0x79, 0x92, 0x2f, 0xcb, 0x6b,
@@ -47,8 +49,6 @@ static const uint8_t COMMIT_IVK_R_Y[32] = {
     0x94, 0x57, 0x4b, 0x28, 0xc4, 0x90, 0xc8, 0xc2,
     0xeb, 0xfa, 0xa2, 0x66, 0x99, 0xd2, 0xcf, 0x29,
 };
-
-#include "pallas_sinsemilla_table.inc"
 
 static void point_from_xy_le(const uint8_t x[32], const uint8_t y[32],
                              curve_point *out) {
@@ -110,6 +110,19 @@ static uint32_t sinsemilla_word(const uint8_t *msg, size_t msg_bits,
   return word;
 }
 
+static int sinsemilla_s_generator(uint32_t word, curve_point *out) {
+  static const char domain[] = "z.cash:SinsemillaS";
+  uint8_t word_le[4] = {
+      (uint8_t)(word & 0xff),
+      (uint8_t)((word >> 8) & 0xff),
+      (uint8_t)((word >> 16) & 0xff),
+      (uint8_t)((word >> 24) & 0xff),
+  };
+  int ret = pallas_hash_to_curve(domain, word_le, sizeof(word_le), out);
+  memzero(word_le, sizeof(word_le));
+  return ret;
+}
+
 static void set_msg_bit(uint8_t *msg, size_t bit) {
   msg[bit / 8] |= (uint8_t)(1u << (bit % 8));
 }
@@ -140,8 +153,10 @@ int pallas_sinsemilla_hash_to_point(const curve_point *q, const uint8_t *msg,
   for (size_t i = 0; i < word_count; i++) {
     uint32_t word = sinsemilla_word(msg, msg_bits, i);
     curve_point s, old_acc, tmp;
-    point_from_xy_le(SINSEMILLA_S_BYTES[word][0],
-                     SINSEMILLA_S_BYTES[word][1], &s);
+    if (sinsemilla_s_generator(word, &s) != 0) {
+      memzero(&acc, sizeof(acc));
+      return -1;
+    }
     old_acc = acc;
 
     if (sinsemilla_incomplete_add(&old_acc, &s, &tmp) != 0 ||
