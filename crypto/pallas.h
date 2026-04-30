@@ -26,6 +26,7 @@
 #ifndef __PALLAS_H__
 #define __PALLAS_H__
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "bignum.h"
@@ -47,6 +48,11 @@ extern const bignum256 pallas_order;
 
 /* Pallas generator point G = (-1 mod p, 2) */
 extern const curve_point pallas_G;
+
+/* expand_message_xmd using BLAKE2b-512, per RFC 9380 §5.3.1. */
+int pallas_expand_message_xmd_blake2b(const uint8_t *msg, size_t msg_len,
+                                      const uint8_t *dst, size_t dst_len,
+                                      uint8_t *out, size_t out_len);
 
 /* --- Field arithmetic mod p (Barrett reduction) --- */
 
@@ -91,5 +97,11 @@ void pallas_point_mult(const bignum256 *k, const curve_point *p,
 /* res = P + Q */
 void pallas_point_add(const curve_point *p, const curve_point *q,
                       curve_point *res);
+
+/* Returns nonzero if P is the point at infinity in this implementation. */
+int pallas_point_is_identity(const curve_point *p);
+
+/* Serialize Pallas point as LE x-coordinate with y parity in bit 255. */
+void pallas_point_encode(const curve_point *p, uint8_t out[32]);
 
 #endif

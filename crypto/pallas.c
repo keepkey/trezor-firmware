@@ -35,6 +35,7 @@
 
 #include <string.h>
 
+#include "blake2b.h"
 #include "memzero.h"
 
 /* bn_multiply_long is defined in bignum.c (non-static) */
@@ -688,4 +689,117 @@ void pallas_point_mult(const bignum256 *k, const curve_point *p,
     return;
   }
   pallas_scalar_mult_impl(k, p, res);
+}
+
+int pallas_point_is_identity(const curve_point *p) {
+  if (!p) return 1;
+  return pallas_point_is_infinity(p);
+}
+
+void pallas_point_encode(const curve_point *p, uint8_t out[32]) {
+  if (!p || !out) return;
+
+  memset(out, 0, 32);
+  if (pallas_point_is_infinity(p)) return;
+
+  bignum256 x;
+  bn_copy(&p->x, &x);
+  bn_write_le(&x, out);
+  if (bn_is_odd(&p->y)) {
+    out[31] |= 0x80;
+  }
+  memzero(&x, sizeof(x));
+}
+
+int pallas_expand_message_xmd_blake2b(const uint8_t *msg, size_t msg_len,
+                                      const uint8_t *dst, size_t dst_len,
+                                      uint8_t *out, size_t out_len) {
+  enum {
+    B_IN_BYTES = 64,
+    R_IN_BYTES = 128,
+  };
+
+  if (!out || out_len == 0 || out_len > 0xffff) return -1;
+  if ((!msg && msg_len != 0) || (!dst && dst_len != 0)) return -1;
+  if (dst_len > 255) return -1;
+
+  size_t ell = (out_len + B_IN_BYTES - 1) / B_IN_BYTES;
+  if (ell == 0 || ell > 255) return -1;
+
+  uint8_t dst_prime[256];
+  uint8_t z_pad[R_IN_BYTES] = {0};
+  uint8_t b0[B_IN_BYTES];
+  uint8_t bi[B_IN_BYTES];
+  uint8_t tmp[B_IN_BYTES];
+  uint8_t len_bytes[2] = {(uint8_t)(out_len >> 8), (uint8_t)out_len};
+  uint8_t zero = 0;
+  uint8_t personal[16] = {0};
+  BLAKE2B_CTX ctx;
+
+  if (dst_len != 0) {
+    memcpy(dst_prime, dst, dst_len);
+  }
+  dst_prime[dst_len] = (uint8_t)dst_len;
+  size_t dst_prime_len = dst_len + 1;
+
+  if (blake2b_InitPersonal(&ctx, B_IN_BYTES, personal, sizeof(personal)) != 0) {
+    return -1;
+  }
+  blake2b_Update(&ctx, z_pad, sizeof(z_pad));
+  blake2b_Update(&ctx, msg, msg_len);
+  blake2b_Update(&ctx, len_bytes, sizeof(len_bytes));
+  blake2b_Update(&ctx, &zero, 1);
+  blake2b_Update(&ctx, dst_prime, dst_prime_len);
+  if (blake2b_Final(&ctx, b0, sizeof(b0)) != 0) {
+    memzero(&ctx, sizeof(ctx));
+    return -1;
+  }
+
+  uint8_t ctr = 1;
+  if (blake2b_InitPersonal(&ctx, B_IN_BYTES, personal, sizeof(personal)) != 0) {
+    memzero(&ctx, sizeof(ctx));
+    return -1;
+  }
+  blake2b_Update(&ctx, b0, sizeof(b0));
+  blake2b_Update(&ctx, &ctr, 1);
+  blake2b_Update(&ctx, dst_prime, dst_prime_len);
+  if (blake2b_Final(&ctx, bi, sizeof(bi)) != 0) {
+    memzero(&ctx, sizeof(ctx));
+    return -1;
+  }
+
+  size_t take = out_len < B_IN_BYTES ? out_len : B_IN_BYTES;
+  memcpy(out, bi, take);
+  size_t produced = take;
+
+  for (size_t i = 2; i <= ell; i++) {
+    for (size_t j = 0; j < B_IN_BYTES; j++) {
+      tmp[j] = b0[j] ^ bi[j];
+    }
+
+    ctr = (uint8_t)i;
+    if (blake2b_InitPersonal(&ctx, B_IN_BYTES, personal, sizeof(personal)) != 0) {
+      memzero(&ctx, sizeof(ctx));
+      return -1;
+    }
+    blake2b_Update(&ctx, tmp, sizeof(tmp));
+    blake2b_Update(&ctx, &ctr, 1);
+    blake2b_Update(&ctx, dst_prime, dst_prime_len);
+    if (blake2b_Final(&ctx, bi, sizeof(bi)) != 0) {
+      memzero(&ctx, sizeof(ctx));
+      return -1;
+    }
+
+    take = out_len - produced;
+    if (take > B_IN_BYTES) take = B_IN_BYTES;
+    memcpy(out + produced, bi, take);
+    produced += take;
+  }
+
+  memzero(&ctx, sizeof(ctx));
+  memzero(dst_prime, sizeof(dst_prime));
+  memzero(b0, sizeof(b0));
+  memzero(bi, sizeof(bi));
+  memzero(tmp, sizeof(tmp));
+  return 0;
 }
