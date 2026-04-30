@@ -77,6 +77,7 @@ SRCS  += rc4.c
 SRCS  += nem.c
 SRCS  += nano.c
 SRCS  += segwit_addr.c cash_addr.c
+SRCS  += zcash_zip316.c
 SRCS  += memzero.c
 SRCS  += shamir.c
 SRCS  += hmac_drbg.c
