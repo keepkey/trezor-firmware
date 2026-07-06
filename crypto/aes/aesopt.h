@@ -402,36 +402,41 @@ Issue Date: 20/12/2007
 
     Include or exclude the appropriate definitions below to set the number
     of tables used by this implementation.
+
+    Defining AES_SMALL_TABLES selects ONE_TABLE for every round function,
+    shrinking the five lookup tables from 4096 to 1024 bytes each (15,360
+    bytes of flash reclaimed) at a modest cycle cost per round. Intended
+    for ROM-constrained firmware variants; the default remains FOUR_TABLES.
 */
 
-#if 1   /* set tables for the normal encryption round */
-#  define ENC_ROUND   FOUR_TABLES
-#elif 0
+#if defined( AES_SMALL_TABLES )   /* set tables for the normal encryption round */
 #  define ENC_ROUND   ONE_TABLE
+#elif 1
+#  define ENC_ROUND   FOUR_TABLES
 #else
 #  define ENC_ROUND   NO_TABLES
 #endif
 
-#if 1   /* set tables for the last encryption round */
-#  define LAST_ENC_ROUND  FOUR_TABLES
-#elif 0
+#if defined( AES_SMALL_TABLES )   /* set tables for the last encryption round */
 #  define LAST_ENC_ROUND  ONE_TABLE
+#elif 1
+#  define LAST_ENC_ROUND  FOUR_TABLES
 #else
 #  define LAST_ENC_ROUND  NO_TABLES
 #endif
 
-#if 1   /* set tables for the normal decryption round */
-#  define DEC_ROUND   FOUR_TABLES
-#elif 0
+#if defined( AES_SMALL_TABLES )   /* set tables for the normal decryption round */
 #  define DEC_ROUND   ONE_TABLE
+#elif 1
+#  define DEC_ROUND   FOUR_TABLES
 #else
 #  define DEC_ROUND   NO_TABLES
 #endif
 
-#if 1   /* set tables for the last decryption round */
-#  define LAST_DEC_ROUND  FOUR_TABLES
-#elif 0
+#if defined( AES_SMALL_TABLES )   /* set tables for the last decryption round */
 #  define LAST_DEC_ROUND  ONE_TABLE
+#elif 1
+#  define LAST_DEC_ROUND  FOUR_TABLES
 #else
 #  define LAST_DEC_ROUND  NO_TABLES
 #endif
@@ -440,10 +445,10 @@ Issue Date: 20/12/2007
     way that the round functions can.  Include or exclude the following
     defines to set this requirement.
 */
-#if 1
-#  define KEY_SCHED   FOUR_TABLES
-#elif 0
+#if defined( AES_SMALL_TABLES )
 #  define KEY_SCHED   ONE_TABLE
+#elif 1
+#  define KEY_SCHED   FOUR_TABLES
 #else
 #  define KEY_SCHED   NO_TABLES
 #endif
