@@ -1,0 +1,65 @@
+name: Crypto audit
+
+on:
+  pull_request:
+    paths:
+      - "crypto/**"
+      - ".github/workflows/crypto.yml"
+  push:
+    branches:
+      - keepkey
+    paths:
+      - "crypto/**"
+      - ".github/workflows/crypto.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  crypto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify pull-request patch hygiene
+        if: github.event_name == 'pull_request'
+        run: git diff --check "${{ github.event.pull_request.base.sha }}..HEAD"
+
+      - name: Verify pushed patch hygiene
+        if: github.event_name == 'push'
+        run: git diff --check HEAD^
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y check libssl-dev pkg-config valgrind
+
+      - name: Run optimized suite
+        working-directory: crypto
+        run: |
+          make clean
+          make VALGRIND=0 tests/test_check tests/test_pallas_ct
+          ./tests/test_check
+          ./tests/test_pallas_ct
+
+      - name: Verify Pallas secret flow with Valgrind
+        working-directory: crypto
+        run: |
+          make clean
+          make VALGRIND=1 OPTFLAGS='-O2 -g' tests/test_pallas_ct
+          valgrind --quiet --error-exitcode=1 --track-origins=yes ./tests/test_pallas_ct
+
+      - name: Run ASan and UBSan suite
+        working-directory: crypto
+        run: |
+          make clean
+          make CC='gcc -fsanitize=address,undefined' VALGRIND=0 \
+            OPTFLAGS='-O1 -g -fno-omit-frame-pointer' \
+            tests/test_check tests/test_pallas_ct
+          CK_DEFAULT_TIMEOUT=30 \
+            ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 ./tests/test_check
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 ./tests/test_pallas_ct

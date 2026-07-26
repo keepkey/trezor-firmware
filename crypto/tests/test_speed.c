@@ -61,7 +61,7 @@ void bench_sign_ed25519(int iterations) {
   ed25519_publickey(sk, pk);
 
   for (int i = 0; i < iterations; i++) {
-    ed25519_sign(msg, sizeof(msg), sk, pk, sig);
+    ed25519_sign(msg, sizeof(msg), sk, sig);
   }
 }
 
@@ -143,7 +143,7 @@ void bench_verify_ed25519(int iterations) {
          "\xb5\xe1\xfb\xd7\xc6\xa2\xec\x1e\x03\x1f\x05\xe8\x6d\x8b\xd5",
          32);
   ed25519_publickey(sk, pk);
-  ed25519_sign(msg, sizeof(msg), sk, pk, sig);
+  ed25519_sign(msg, sizeof(msg), sk, sig);
 
   for (int i = 0; i < iterations; i++) {
     ed25519_sign_open(msg, sizeof(msg), pk, sig);
