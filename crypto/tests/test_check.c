@@ -2113,6 +2113,43 @@ START_TEST(test_bip32_cache_2) {
 }
 END_TEST
 
+START_TEST(test_bip32_cache_overflow_regression) {
+  HDNode node1 = {0};
+  HDNode node2 = {0};
+  const uint8_t *seed = fromhex(
+      "301133282ad079cbeb59bc446ad39d333928f74c46997d3609cd3e2801ca69d62788f9f1"
+      "74429946ff4e9be89f67c22fae28cb296a9b37734f75e73d1477af19");
+  uint32_t path[BIP32_CACHE_MAXDEPTH + 2] = {0};
+  size_t depth = sizeof(path) / sizeof(path[0]);
+
+  hdnode_from_seed(seed, 64, SECP256K1_NAME, &node1);
+  hdnode_from_seed(seed, 64, SECP256K1_NAME, &node2);
+  ck_assert_int_eq(hdnode_private_ckd_cached(&node1, path, depth, NULL), 1);
+
+  // A path deeper than the cache must not corrupt the fixed-size cache key.
+  path[BIP32_CACHE_MAXDEPTH] = BIP32_CACHE_MAXDEPTH + 1;
+  ck_assert_int_eq(hdnode_private_ckd_cached(&node2, path, depth, NULL), 1);
+  ck_assert_mem_ne(node1.private_key, node2.private_key,
+                   sizeof(node1.private_key));
+}
+END_TEST
+
+START_TEST(test_bip32_depth_overflow_regression) {
+  HDNode node = {0};
+  hdnode_from_seed(fromhex("000102030405060708090a0b0c0d0e0f"), 16,
+                   SECP256K1_NAME, &node);
+  hdnode_fill_public_key(&node);
+  node.depth = UINT32_MAX;
+
+  ck_assert_int_eq(hdnode_private_ckd(&node, 1), 0);
+  ck_assert_uint_eq(node.depth, UINT32_MAX);
+
+  memzero(node.private_key, sizeof(node.private_key));
+  ck_assert_int_eq(hdnode_public_ckd(&node, 1), 0);
+  ck_assert_uint_eq(node.depth, UINT32_MAX);
+}
+END_TEST
+
 START_TEST(test_bip32_nist_seed) {
   HDNode node;
 
@@ -3513,6 +3550,14 @@ START_TEST(test_ecdsa_signature) {
           "0490d2bd2e9a564d6e1d8324fc6ad00aa4ae597684ecf4abea58bdfe7287ea4fa729"
           "68c2e5b0b40999ede3d7898d94e82c3f8dc4536a567a4bd45998c826a4c4b2"),
       65);
+  // A recovered point at infinity is not a valid public key.
+  res = ecdsa_recover_pub_from_sig(
+      curve, pubkey,
+      fromhex(
+          "220cf4c7b6d568f2256a8c30cc1784a625a28c3627dac404aa9a9ecd08314ec81a88"
+          "828f20d69d102bab5de5f6ee7ef040cb0ff7b8e1ba3f29d79efb5250f47d"),
+      digest, 0);
+  ck_assert_int_eq(res, 1);
 
   memcpy(
       digest,
@@ -3640,7 +3685,7 @@ END_TEST
 #define test_deterministic(KEY, MSG, K)           \
   do {                                            \
     sha256_Raw((uint8_t *)MSG, strlen(MSG), buf); \
-    init_rfc6979(fromhex(KEY), buf, &rng);        \
+    init_rfc6979(fromhex(KEY), buf, NULL, &rng);  \
     generate_k_rfc6979(&k, &rng);                 \
     bn_write_be(&k, buf);                         \
     ck_assert_mem_eq(buf, fromhex(K), 32);        \
@@ -3682,6 +3727,36 @@ START_TEST(test_rfc6979) {
       "about. It's a very serious disease and it interferes completely with "
       "the work. The trouble with computers is that you 'play' with them!",
       "1f4b84c23a86a221d233f2521be018d9318639d5b8bbd6374a8a59232d16ad3d");
+}
+END_TEST
+
+START_TEST(test_ecdsa_sign_digest_deterministic_regression) {
+  static const struct {
+    const char *priv_key;
+    const char *digest;
+    const char *sig;
+  } vectors[] = {
+      {"312155017c70a204106e034520e0cdf17b3e54516e2ece38e38e38e38e38e38e",
+       "ffffffffffffffffffffffffffffffff20202020202020202020202020202020",
+       "e3d70248ea2fc771fc8d5e62d76b9cfd5402c96990333549eaadce1ae9f737eb"
+       "5cfbdc7d1e0ec18cc9b57bbb18f0a57dc929ec3c4dfac9073c581705015f6a8a"},
+      {"312155017c70a204106e034520e0cdf17b3e54516e2ece38e38e38e38e38e38e",
+       "2020202020202020202020202020202020202020202020202020202020202020",
+       "40666188895430715552a7e4c6b53851f37a93030fb94e043850921242db78e8"
+       "75aa2ac9fd7e5a19402973e60e64382cdc29a09ebf6cb37e92f23be5b9251aee"},
+  };
+  uint8_t priv_key[32] = {0};
+  uint8_t digest[32] = {0};
+  uint8_t sig[64] = {0};
+
+  for (size_t i = 0; i < sizeof(vectors) / sizeof(*vectors); i++) {
+    memcpy(priv_key, fromhex(vectors[i].priv_key), sizeof(priv_key));
+    memcpy(digest, fromhex(vectors[i].digest), sizeof(digest));
+    ck_assert_int_eq(
+        ecdsa_sign_digest(&secp256k1, priv_key, digest, sig, NULL, NULL),
+        0);
+    ck_assert_mem_eq(sig, fromhex(vectors[i].sig), sizeof(sig));
+  }
 }
 END_TEST
 
@@ -6083,6 +6158,11 @@ START_TEST(test_ecdsa_der) {
           "00000000000000000000000000000000000000000000000000000000000000ff",
           "3008020200ee020200ff",
       },
+      {
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "3006020100020100",
+      },
   };
 
   uint8_t sig[64];
@@ -6371,7 +6451,7 @@ START_TEST(test_ed25519) {
     UNMARK_SECRET_DATA(pk, sizeof(pk));
     ck_assert_mem_eq(pk, fromhex(*spk), 32);
 
-    ed25519_sign(pk, 32, sk, pk, sig);
+    ed25519_sign(pk, 32, sk, sig);
     UNMARK_SECRET_DATA(sig, sizeof(sig));
     ck_assert_mem_eq(sig, fromhex(*ssig), 64);
 
@@ -6589,7 +6669,7 @@ START_TEST(test_ed25519_keccak) {
     ck_assert_mem_eq(public_key, fromhex(tests[i].public_key), 32);
 
     ed25519_sign_keccak(fromhex(tests[i].data), tests[i].length, private_key,
-                        public_key, signature);
+                        signature);
     UNMARK_SECRET_DATA(signature, sizeof(signature));
     ck_assert_mem_eq(signature, fromhex(tests[i].signature), 64);
 
@@ -6599,7 +6679,7 @@ START_TEST(test_ed25519_keccak) {
 END_TEST
 
 START_TEST(test_ed25519_cosi) {
-  const int MAXN = 10;
+  enum { MAXN = 10 };
   ed25519_secret_key keys[MAXN];
   ed25519_public_key pubkeys[MAXN];
   ed25519_secret_key nonces[MAXN];
@@ -6614,7 +6694,7 @@ START_TEST(test_ed25519_cosi) {
           "26c76712d89d906e6672dafa614c42e5cb1caac8c6568e4d2493087db51f0d36"),
       fromhex(
           "26659c1cf7321c178c07437150639ff0c5b7679c7ea195253ed9abda2e081a37"),
-      &rng);
+      NULL, &rng);
 
   for (int N = 1; N < 11; N++) {
     ed25519_public_key pk;
@@ -6632,8 +6712,7 @@ START_TEST(test_ed25519_cosi) {
 
     /* phase 1: create nonces, commitments (R values) and combine commitments */
     for (int j = 0; j < N; j++) {
-      generate_rfc6979(nonces[j], &rng);
-      ed25519_publickey(nonces[j], Rs[j]);
+      ed25519_cosi_commit(nonces[j], Rs[j]);
     }
     res = ed25519_cosi_combine_publickeys(R, Rs, N);
     ck_assert_int_eq(res, 0);
@@ -6641,7 +6720,10 @@ START_TEST(test_ed25519_cosi) {
     MARK_SECRET_DATA(keys, sizeof(keys));
     /* phase 2: sign and combine signatures */
     for (int j = 0; j < N; j++) {
-      ed25519_cosi_sign(msg, sizeof(msg), keys[j], nonces[j], R, pk, sigs[j]);
+      res =
+          ed25519_cosi_sign(msg, sizeof(msg), keys[j], nonces[j], R, pk,
+                            sigs[j]);
+      ck_assert_int_eq(res, 0);
     }
     UNMARK_SECRET_DATA(sigs, sizeof(sigs));
 
@@ -9130,6 +9212,8 @@ Suite *test_suite(void) {
   tcase_add_test(tc, test_bip32_optimized);
   tcase_add_test(tc, test_bip32_cache_1);
   tcase_add_test(tc, test_bip32_cache_2);
+  tcase_add_test(tc, test_bip32_cache_overflow_regression);
+  tcase_add_test(tc, test_bip32_depth_overflow_regression);
   suite_add_tcase(s, tc);
 
   tc = tcase_create("bip32-nist");
@@ -9158,6 +9242,7 @@ Suite *test_suite(void) {
 
   tc = tcase_create("ecdsa");
   tcase_add_test(tc, test_ecdsa_signature);
+  tcase_add_test(tc, test_ecdsa_sign_digest_deterministic_regression);
   suite_add_tcase(s, tc);
 
   tc = tcase_create("rfc6979");

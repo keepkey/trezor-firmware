@@ -44,6 +44,11 @@ static CONFIDENTIAL struct {
   uint8_t seed[512 / 8];
 } bip39_cache[BIP39_CACHE_SIZE];
 
+void bip39_cache_clear(void) {
+  memzero(bip39_cache, sizeof(bip39_cache));
+  bip39_cache_index = 0;
+}
+
 #endif
 
 const char *mnemonic_generate(int strength) {
@@ -94,92 +99,143 @@ const char *mnemonic_from_data(const uint8_t *data, int len) {
 
 void mnemonic_clear(void) { memzero(mnemo, sizeof(mnemo)); }
 
-int mnemonic_to_bits(const char *mnemonic, uint8_t *bits) {
-  if (!mnemonic) {
+typedef struct {
+  int index;
+  size_t length;
+} found_word;
+
+static bool constant_time_memeq(const void *s1, const void *s2, size_t n) {
+  const unsigned char *p1 = s1;
+  const unsigned char *p2 = s2;
+  unsigned int diff = 0;
+  for (size_t i = 0; i < n; i++) {
+    diff |= p1[i] ^ p2[i];
+  }
+  return diff == 0;
+}
+
+static found_word mnemonic_find_word_constant_time(const char *word) {
+  int result_index = -1;
+  size_t result_length = 0;
+
+  for (int i = 0; i < BIP39_WORDS; i++) {
+    const char *dict_word = wordlist[i];
+    size_t dict_word_len = strlen(dict_word);
+    bool is_match =
+        constant_time_memeq(word, dict_word, dict_word_len + 1);
+    int match_mask = -((int)is_match);
+    result_index = (match_mask & i) | (~match_mask & result_index);
+    result_length =
+        ((size_t)match_mask & dict_word_len) |
+        ((size_t)~match_mask & result_length);
+  }
+
+  return (found_word){.index = result_index, .length = result_length};
+}
+
+int mnemonic_to_bits(const char *mnemonic_orig, uint8_t *bits) {
+  if (!mnemonic_orig || !bits) {
     return 0;
   }
 
-  uint32_t i = 0, n = 0;
-
-  while (mnemonic[i]) {
-    if (mnemonic[i] == ' ') {
-      n++;
-    }
-    i++;
-  }
-  n++;
-
-  // check number of words
-  if (n != 12 && n != 18 && n != 24) {
-    return 0;
-  }
-
-  char current_word[10] = {0};
-  uint32_t j = 0, k = 0, ki = 0, bi = 0;
+  char mnemonic[BIP39_MAX_MNEMONIC_LEN + BIP39_MAX_WORD_LEN + 1] = {0};
   uint8_t result[32 + 1] = {0};
+  int result_bits = 0;
 
-  memzero(result, sizeof(result));
-  i = 0;
-  while (mnemonic[i]) {
-    j = 0;
-    while (mnemonic[i] != ' ' && mnemonic[i] != 0) {
-      if (j >= sizeof(current_word) - 1) {
-        return 0;
-      }
-      current_word[j] = mnemonic[i];
-      i++;
-      j++;
+  size_t mnemonic_len = strlen(mnemonic_orig);
+  if (mnemonic_len > BIP39_MAX_MNEMONIC_LEN) {
+    goto cleanup;
+  }
+
+  uint32_t word_count = 0;
+  for (size_t i = 0; i < mnemonic_len; i++) {
+    bool is_space = mnemonic_orig[i] == ' ';
+    int space_mask = -((int)is_space) & ' ';
+    mnemonic[i] = mnemonic_orig[i] ^ space_mask;
+    word_count += is_space;
+  }
+  word_count++;
+
+  if (word_count < 12 || word_count > 24 || (word_count % 3)) {
+    goto cleanup;
+  }
+
+  uint32_t bit_count = 0;
+  size_t word_offset = 0;
+  while (word_offset < mnemonic_len) {
+    found_word found =
+        mnemonic_find_word_constant_time(&mnemonic[word_offset]);
+    word_offset += found.length + 1;
+    if (found.index < 0) {
+      goto cleanup;
     }
-    current_word[j] = 0;
-    if (mnemonic[i] != 0) {
-      i++;
-    }
-    k = 0;
-    for (;;) {
-      if (!wordlist[k]) {  // word not found
-        return 0;
-      }
-      if (strcmp(current_word, wordlist[k]) == 0) {  // word found on index k
-        for (ki = 0; ki < 11; ki++) {
-          if (k & (1 << (10 - ki))) {
-            result[bi / 8] |= 1 << (7 - (bi % 8));
-          }
-          bi++;
-        }
-        break;
-      }
-      k++;
+
+    for (uint32_t bit_in_index = 0; bit_in_index < BIP39_BITS_PER_WORD;
+         bit_in_index++) {
+      uint32_t secret_bit =
+          ((uint32_t)found.index >>
+           (BIP39_BITS_PER_WORD - 1 - bit_in_index)) &
+          1;
+      uint32_t mask = 0U - secret_bit;
+      result[bit_count / 8] |=
+          (uint8_t)((1U << (7 - (bit_count % 8))) & mask);
+      bit_count++;
     }
   }
-  if (bi != n * 11) {
-    return 0;
+
+  if (bit_count != word_count * BIP39_BITS_PER_WORD) {
+    goto cleanup;
   }
+
   memcpy(bits, result, sizeof(result));
-  memzero(result, sizeof(result));
+  result_bits = (int)bit_count;
 
-  // returns amount of entropy + checksum BITS
-  return n * 11;
+cleanup:
+  memzero(result, sizeof(result));
+  memzero(mnemonic, sizeof(mnemonic));
+  return result_bits;
 }
 
 int mnemonic_check(const char *mnemonic) {
   uint8_t bits[32 + 1] = {0};
   int mnemonic_bits_len = mnemonic_to_bits(mnemonic, bits);
-  if (mnemonic_bits_len != (12 * 11) && mnemonic_bits_len != (18 * 11) &&
-      mnemonic_bits_len != (24 * 11)) {
-    return 0;
+  int result = 0;
+  if (mnemonic_bits_len != (12 * BIP39_BITS_PER_WORD) &&
+      mnemonic_bits_len != (18 * BIP39_BITS_PER_WORD) &&
+      mnemonic_bits_len != (24 * BIP39_BITS_PER_WORD)) {
+    goto cleanup;
   }
-  int words = mnemonic_bits_len / 11;
+  int words = mnemonic_bits_len / BIP39_BITS_PER_WORD;
 
   uint8_t checksum = bits[words * 4 / 3];
   sha256_Raw(bits, words * 4 / 3, bits);
   if (words == 12) {
-    return (bits[0] & 0xF0) == (checksum & 0xF0);  // compare first 4 bits
+    result = (bits[0] & 0xF0) == (checksum & 0xF0);
   } else if (words == 18) {
-    return (bits[0] & 0xFC) == (checksum & 0xFC);  // compare first 6 bits
+    result = (bits[0] & 0xFC) == (checksum & 0xFC);
   } else if (words == 24) {
-    return bits[0] == checksum;  // compare 8 bits
+    result = bits[0] == checksum;
   }
-  return 0;
+
+cleanup:
+  memzero(bits, sizeof(bits));
+  return result;
+}
+
+int mnemonic_find_word(const char *word) {
+  if (!word) {
+    return -1;
+  }
+
+  char word_buffer[BIP39_MAX_WORD_LEN + 1] = {0};
+  size_t word_len = strnlen(word, sizeof(word_buffer));
+  if (word_len > BIP39_MAX_WORD_LEN) {
+    return -1;
+  }
+  memcpy(word_buffer, word, word_len);
+  found_word found = mnemonic_find_word_constant_time(word_buffer);
+  memzero(word_buffer, sizeof(word_buffer));
+  return found.index;
 }
 
 // passphrase must be at most 256 characters otherwise it would be truncated
@@ -230,24 +286,6 @@ void mnemonic_to_seed(const char *mnemonic, const char *passphrase,
     bip39_cache_index = (bip39_cache_index + 1) % BIP39_CACHE_SIZE;
   }
 #endif
-}
-
-// binary search for finding the word in the wordlist
-int mnemonic_find_word(const char *word) {
-  int lo = 0, hi = BIP39_WORDS - 1;
-  while (lo <= hi) {
-    int mid = lo + (hi - lo) / 2;
-    int cmp = strcmp(word, wordlist[mid]);
-    if (cmp == 0) {
-      return mid;
-    }
-    if (cmp > 0) {
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return -1;
 }
 
 const char *mnemonic_complete_word(const char *prefix, int len) {

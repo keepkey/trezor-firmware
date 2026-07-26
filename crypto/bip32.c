@@ -213,18 +213,27 @@ uint32_t hdnode_fingerprint(HDNode *node) {
   if (!hdnode_is_valid(node)) return 0;
 
   uint8_t digest[32] = {0};
+  uint8_t public_key[33] = {0};
   uint32_t fingerprint = 0;
 
   hdnode_fill_public_key(node);
-  hasher_Raw(node->curve->hasher_pubkey, node->public_key, 33, digest);
+  memcpy(public_key, node->public_key, sizeof(public_key));
+  if (public_key[0] == 0x01) {
+    // SLIP-10 fingerprints Ed25519 and Curve25519 keys with a 0x00 prefix.
+    public_key[0] = 0x00;
+  }
+  hasher_Raw(node->curve->hasher_pubkey, public_key, sizeof(public_key),
+             digest);
   fingerprint = ((uint32_t)digest[0] << 24) + (digest[1] << 16) +
                 (digest[2] << 8) + digest[3];
+  memzero(public_key, sizeof(public_key));
   memzero(digest, sizeof(digest));
   return fingerprint;
 }
 
 int hdnode_private_ckd(HDNode *inout, uint32_t i) {
   if (!hdnode_is_valid(inout)) return 0;
+  if (inout->depth == UINT32_MAX) return 0;
 
   static CONFIDENTIAL uint8_t data[1 + 32 + 4];
   static CONFIDENTIAL uint8_t I[32 + 32];
@@ -484,6 +493,11 @@ int hdnode_public_ckd_cp(const ecdsa_curve *curve, const curve_point *parent,
 
 int hdnode_public_ckd(HDNode *inout, uint32_t i) {
   if (!hdnode_is_valid(inout)) return 0;
+  if (inout->depth == UINT32_MAX) return 0;
+  if (!inout->curve->params) {
+    // SLIP-10 does not define public child derivation for 25519 curves.
+    return 0;
+  }
 
   curve_point parent = {0}, child = {0};
 
@@ -544,19 +558,30 @@ static CONFIDENTIAL struct {
   HDNode node;
 } private_ckd_cache[BIP32_CACHE_SIZE];
 
+void bip32_cache_clear(void) {
+  private_ckd_cache_root_set = false;
+  private_ckd_cache_index = 0;
+  memzero(&private_ckd_cache_root, sizeof(private_ckd_cache_root));
+  memzero(private_ckd_cache, sizeof(private_ckd_cache));
+}
+
 int hdnode_private_ckd_cached(HDNode *inout, const uint32_t *i, size_t i_count,
                               uint32_t *fingerprint) {
-  if (!hdnode_is_valid(inout)) return 1;
+  if (!hdnode_is_valid(inout)) return 0;
 
   if (i_count == 0) {
     // no way how to compute parent fingerprint
     return 1;
   }
-  if (i_count == 1) {
+  if (i_count == 1 || i_count - 1 > BIP32_CACHE_MAXDEPTH) {
+    // when parent is uncacheable just derive the node and return
+    for (size_t k = 0; k < i_count - 1; k++) {
+      if (hdnode_private_ckd(inout, i[k]) == 0) return 0;
+    }
     if (fingerprint) {
       *fingerprint = hdnode_fingerprint(inout);
     }
-    if (hdnode_private_ckd(inout, i[0]) == 0) return 0;
+    if (hdnode_private_ckd(inout, i[i_count - 1]) == 0) return 0;
     return 1;
   }
 
@@ -755,23 +780,27 @@ int hdnode_nem_encrypt(const HDNode *node, const ed25519_public_key public_key,
 
   aes_encrypt_ctx ctx = {0};
 
+  int succ = 0;
   int ret = aes_encrypt_key256(shared_key, &ctx);
   memzero(shared_key, sizeof(shared_key));
 
   if (ret != EXIT_SUCCESS) {
-    return 0;
+    goto cleanup;
   }
 
   if (aes_cbc_encrypt(payload, buffer, size, iv, &ctx) != EXIT_SUCCESS) {
-    return 0;
+    goto cleanup;
   }
 
   if (aes_cbc_encrypt(last_block, &buffer[size], sizeof(last_block), iv,
                       &ctx) != EXIT_SUCCESS) {
-    return 0;
+    goto cleanup;
   }
 
-  return 1;
+  succ = 1;
+cleanup:
+  memzero(&ctx, sizeof(ctx));
+  return succ;
 }
 
 int hdnode_nem_decrypt(const HDNode *node, const ed25519_public_key public_key,
@@ -787,18 +816,22 @@ int hdnode_nem_decrypt(const HDNode *node, const ed25519_public_key public_key,
 
   aes_decrypt_ctx ctx = {0};
 
+  int succ = 0;
   int ret = aes_decrypt_key256(shared_key, &ctx);
   memzero(shared_key, sizeof(shared_key));
 
   if (ret != EXIT_SUCCESS) {
-    return 0;
+    goto cleanup;
   }
 
   if (aes_cbc_decrypt(payload, buffer, size, iv, &ctx) != EXIT_SUCCESS) {
-    return 0;
+    goto cleanup;
   }
 
-  return 1;
+  succ = 1;
+cleanup:
+  memzero(&ctx, sizeof(ctx));
+  return succ;
 }
 #endif
 
@@ -816,21 +849,16 @@ int hdnode_sign(HDNode *node, const uint8_t *msg, uint32_t msg_len,
     return 1;  // signatures are not supported
   } else {
     if (node->curve == &ed25519_info) {
-      hdnode_fill_public_key(node);
-      ed25519_sign(msg, msg_len, node->private_key, node->public_key + 1, sig);
+      ed25519_sign(msg, msg_len, node->private_key, sig);
 #if USE_NANO
     } else if (node->curve == &ed25519_blake2b_nano_info) {
-      ed25519_sign_blake2b(msg, msg_len, node->private_key, node->public_key + 1, sig);
+      ed25519_sign_blake2b(msg, msg_len, node->private_key, sig);
 #endif
     } else if (node->curve == &ed25519_sha3_info) {
-      hdnode_fill_public_key(node);
-      ed25519_sign_sha3(msg, msg_len, node->private_key, node->public_key + 1,
-                        sig);
+      ed25519_sign_sha3(msg, msg_len, node->private_key, sig);
 #if USE_KECCAK
     } else if (node->curve == &ed25519_keccak_info) {
-      hdnode_fill_public_key(node);
-      ed25519_sign_keccak(msg, msg_len, node->private_key, node->public_key + 1,
-                          sig);
+      ed25519_sign_keccak(msg, msg_len, node->private_key, sig);
 #endif
     } else {
       return 1;  // unknown or unsupported curve
@@ -918,23 +946,29 @@ int hdnode_serialize_private(const HDNode *node, uint32_t fingerprint,
 static int hdnode_deserialize(const char *str, uint32_t version,
                               bool use_private, const char *curve, HDNode *node,
                               uint32_t *fingerprint) {
-  if (!hdnode_is_valid(node)) return -1;
-
+  int ret = 0;
   uint8_t node_data[78] = {0};
   memzero(node, sizeof(HDNode));
   node->curve = get_curve_by_name(curve);
+  if (!node->curve) {
+    ret = -1;
+    goto cleanup;
+  }
   if (base58_decode_check(str, node->curve->hasher_base58, node_data,
                           sizeof(node_data)) != sizeof(node_data)) {
-    return -1;
+    ret = -1;
+    goto cleanup;
   }
   uint32_t ver = read_be(node_data);
   if (ver != version) {
-    return -3;  // invalid version
+    ret = -3;  // invalid version
+    goto cleanup;
   }
   if (use_private) {
     // invalid data
     if (node_data[45]) {
-      return -2;
+      ret = -2;
+      goto cleanup;
     }
     memcpy(node->private_key, node_data + 46, 32);
     memzero(node->public_key, sizeof(node->public_key));
@@ -948,7 +982,10 @@ static int hdnode_deserialize(const char *str, uint32_t version,
   }
   node->child_num = read_be(node_data + 9);
   memcpy(node->chain_code, node_data + 13, 32);
-  return 0;
+
+cleanup:
+  memzero(node_data, sizeof(node_data));
+  return ret;
 }
 
 int hdnode_deserialize_public(const char *str, uint32_t version,

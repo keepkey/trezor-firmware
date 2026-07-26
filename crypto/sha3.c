@@ -26,7 +26,7 @@
 #define I64(x) x##LL
 #define ROTL64(qword, n) ((qword) << (n) ^ ((qword) >> (64 - (n))))
 #define le2me_64(x) (x)
-#define IS_ALIGNED_64(p) (0 == (7 & ((const char*)(p) - (const char*)0)))
+#define IS_ALIGNED_64(p) (0 == (((uintptr_t)(const void *)(p) & 0x7)))
 # define me64_to_le_str(to, from, length) memcpy((to), (from), (length))
 
 /* constants */
@@ -269,6 +269,8 @@ static void sha3_process_block(uint64_t hash[25], const uint64_t *block, size_t 
  */
 void sha3_Update(SHA3_CTX *ctx, const unsigned char *msg, size_t size)
 {
+  if (size == 0) return;
+
 	size_t idx = (size_t)ctx->rest;
 	size_t block_size = (size_t)ctx->block_size;
 

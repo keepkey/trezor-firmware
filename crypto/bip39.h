@@ -25,10 +25,20 @@
 #define __BIP39_H__
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include "options.h"
 
 #define BIP39_WORDS 2048
 #define BIP39_PBKDF2_ROUNDS 2048
+#define BIP39_MAX_WORD_LEN 8
+#define BIP39_MAX_MNEMONIC_LEN (24 * BIP39_MAX_WORD_LEN + 23)
+#define BIP39_BITS_PER_WORD 11
+
+#if USE_BIP39_CACHE
+void bip39_cache_clear(void);
+#endif
 
 const char *mnemonic_generate(int strength);  // strength in bits
 const char *mnemonic_from_data(const uint8_t *data, int len);
