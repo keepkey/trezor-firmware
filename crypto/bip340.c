@@ -67,21 +67,38 @@ int bip340_get_xonly_pubkey(const ecdsa_curve *curve, const uint8_t *priv_key,
   return 0;
 }
 
+// t = int(tagged_hash("TapTweak", internal || merkle_root)).  merkle_root is
+// NULL for the key-path-only case (BIP-86), where the hash covers the internal
+// key alone.  BIP-341 requires t < n.
+static int calc_tweak(const ecdsa_curve *curve,
+                      const uint8_t internal[BIP340_XONLY_LENGTH],
+                      const uint8_t *merkle_root, bignum256 *t) {
+  SHA256_CTX ctx = {0};
+  uint8_t tweak[SHA256_DIGEST_LENGTH] = {0};
+
+  bip340_tagged_hash_init(&ctx, "TapTweak");
+  sha256_Update(&ctx, internal, BIP340_XONLY_LENGTH);
+  if (merkle_root != NULL) {
+    sha256_Update(&ctx, merkle_root, 32);
+  }
+  sha256_Final(&ctx, tweak);
+
+  bn_read_be(tweak, t);
+  return bn_is_less(t, &curve->order) ? 0 : 1;
+}
+
 int bip340_tweak_pubkey(const ecdsa_curve *curve,
                         const uint8_t internal[BIP340_XONLY_LENGTH],
+                        const uint8_t *merkle_root,
                         uint8_t output[BIP340_XONLY_LENGTH]) {
   uint8_t compressed[33] = {0};
-  uint8_t tweak[SHA256_DIGEST_LENGTH] = {0};
   curve_point P = {0}, T = {0};
   bignum256 t = {0};
 
-  // t = int(tagged_hash("TapTweak", internal)), which BIP-341 requires to be
-  // less than n.  t == 0 needs no special case: scalar_multiply() returns the
-  // point at infinity and point_add() then leaves P alone, giving Q = P as
-  // the spec says.
-  bip340_tagged_hash("TapTweak", internal, BIP340_XONLY_LENGTH, tweak);
-  bn_read_be(tweak, &t);
-  if (!bn_is_less(&t, &curve->order)) {
+  // t == 0 needs no special case: scalar_multiply() returns the point at
+  // infinity and point_add() then leaves P alone, giving Q = P as the spec
+  // says.
+  if (calc_tweak(curve, internal, merkle_root, &t) != 0) {
     return 1;
   }
 
@@ -104,6 +121,101 @@ int bip340_tweak_pubkey(const ecdsa_curve *curve,
 
   bn_write_be(&P.x, output);
   return 0;
+}
+
+int bip340_tweak_seckey(const ecdsa_curve *curve,
+                        const uint8_t priv_key[32],
+                        const uint8_t *merkle_root, uint8_t output[32]) {
+  uint8_t compressed[33] = {0};
+  bignum256 d = {0}, t = {0};
+  int ret = 1;
+
+  // d0 = int(sk), rejected unless it is in [1, n-1]
+  bn_read_be(priv_key, &d);
+  if (bn_is_zero(&d) || !bn_is_less(&d, &curve->order)) {
+    goto cleanup;
+  }
+
+  // P = d0 * G.  The compressed prefix is 0x03 exactly when P.y is odd.
+  if (ecdsa_get_public_key33(curve, priv_key, compressed) != 0) {
+    goto cleanup;
+  }
+
+  // d = d0 if has_even_y(P), else n - d0.  As in bip340_sign(), the bn_mod()
+  // after bn_cnegate() is mandatory: the result is otherwise in [n, 2n) and
+  // carries the wrong parity.
+  bn_cnegate(compressed[0] == 0x03, &d, &curve->order);
+  bn_mod(&d, &curve->order);
+
+  if (calc_tweak(curve, compressed + 1, merkle_root, &t) != 0) {
+    goto cleanup;
+  }
+
+  // output = (d + t) mod n
+  bn_addmod(&d, &t, &curve->order);
+  bn_mod(&d, &curve->order);
+  if (bn_is_zero(&d)) {
+    // The tweaked key would be invalid; BIP-341 leaves this to the caller.
+    goto cleanup;
+  }
+  bn_write_be(&d, output);
+  ret = 0;
+
+cleanup:
+  memzero(&d, sizeof(d));
+  memzero(&t, sizeof(t));
+  memzero(compressed, sizeof(compressed));
+  if (ret != 0) {
+    memzero(output, 32);
+  }
+  return ret;
+}
+
+void bip341_sighash(uint8_t hash_type, uint32_t version, uint32_t lock_time,
+                    const uint8_t sha_prevouts[32],
+                    const uint8_t sha_amounts[32],
+                    const uint8_t sha_scriptpubkeys[32],
+                    const uint8_t sha_sequences[32],
+                    const uint8_t sha_outputs[32], uint32_t input_index,
+                    uint8_t hash[SHA256_DIGEST_LENGTH]) {
+  const uint8_t zero = 0;
+  uint8_t le[4] = {0};
+  SHA256_CTX ctx = {0};
+
+  bip340_tagged_hash_init(&ctx, "TapSighash");
+
+  sha256_Update(&ctx, &zero, 1);       // sighash epoch 0
+  sha256_Update(&ctx, &hash_type, 1);  // nHashType
+
+  // The transaction integers go out little-endian, written explicitly rather
+  // than by casting so the encoding does not depend on host byte order.
+  le[0] = version & 0xff;
+  le[1] = (version >> 8) & 0xff;
+  le[2] = (version >> 16) & 0xff;
+  le[3] = (version >> 24) & 0xff;
+  sha256_Update(&ctx, le, 4);  // nVersion
+
+  le[0] = lock_time & 0xff;
+  le[1] = (lock_time >> 8) & 0xff;
+  le[2] = (lock_time >> 16) & 0xff;
+  le[3] = (lock_time >> 24) & 0xff;
+  sha256_Update(&ctx, le, 4);  // nLockTime
+
+  sha256_Update(&ctx, sha_prevouts, 32);
+  sha256_Update(&ctx, sha_amounts, 32);
+  sha256_Update(&ctx, sha_scriptpubkeys, 32);
+  sha256_Update(&ctx, sha_sequences, 32);
+  sha256_Update(&ctx, sha_outputs, 32);
+
+  sha256_Update(&ctx, &zero, 1);  // spend_type: no annex, no tapscript
+
+  le[0] = input_index & 0xff;
+  le[1] = (input_index >> 8) & 0xff;
+  le[2] = (input_index >> 16) & 0xff;
+  le[3] = (input_index >> 24) & 0xff;
+  sha256_Update(&ctx, le, 4);  // input_index
+
+  sha256_Final(&ctx, hash);
 }
 
 // e = int(tagged_hash("BIP0340/challenge", Rx || Px || msg)) mod n

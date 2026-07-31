@@ -58,20 +58,59 @@ void bip340_tagged_hash(const char *tag, const uint8_t *msg, size_t msg_len,
 int bip340_get_xonly_pubkey(const ecdsa_curve *curve, const uint8_t *priv_key,
                             uint8_t pub_key[BIP340_XONLY_LENGTH]);
 
-/** BIP-341 taproot_tweak_pubkey with an empty merkle root.
+/** BIP-341 taproot_tweak_pubkey.
  *
- * Q = lift_x(internal) + int(tagged_hash("TapTweak", internal)) * G, which is
- * the key-path-only case every BIP-86 wallet address uses.  There is no
- * script-tree variant here because nothing needs one yet.
+ * Q = lift_x(internal) + int(tagged_hash("TapTweak", internal || h)) * G
  *
- *  In:  internal: x-only internal public key
- *  Out: output:   x-only output public key, the P2TR witness program
+ *  In:  internal:    x-only internal public key
+ *       merkle_root: 32-byte script tree root, or NULL for the key-path-only
+ *                    case (BIP-86), which is what wallet addresses use
+ *  Out: output:      x-only output public key, the P2TR witness program
  *
  * Returns 0 on success, nonzero on failure.
  */
 int bip340_tweak_pubkey(const ecdsa_curve *curve,
                         const uint8_t internal[BIP340_XONLY_LENGTH],
+                        const uint8_t *merkle_root,
                         uint8_t output[BIP340_XONLY_LENGTH]);
+
+/** BIP-341 taproot_tweak_seckey -- the private-key counterpart.
+ *
+ * Negates the key when its public point has odd y, then adds the same tweak,
+ * so that signing with the result produces a signature valid under the output
+ * key from bip340_tweak_pubkey().
+ *
+ *  In:  priv_key:    32-byte internal private key, must be in [1, n-1]
+ *       merkle_root: as above, NULL for key-path-only
+ *  Out: output:      32-byte tweaked private key, zeroed on failure
+ *
+ * Returns 0 on success, nonzero on failure.
+ */
+int bip340_tweak_seckey(const ecdsa_curve *curve, const uint8_t priv_key[32],
+                        const uint8_t *merkle_root, uint8_t output[32]);
+
+/** BIP-341 key-path signature hash (the SigMsg, tagged-hashed).
+ *
+ * Assembles the sighash from the five precomputed transaction hashes.  Kept
+ * here rather than in the signing state machine because it is a pure function
+ * of its arguments with no transaction dependencies, which is what makes the
+ * field ordering -- the part that silently produces valid signatures over the
+ * wrong transaction -- directly testable against the BIP-341 vectors.
+ *
+ * Only spend_type 0 is emitted: no annex, no tapscript message extension.
+ *
+ *  In:  hash_type: 0 for SIGHASH_DEFAULT
+ *       version, lock_time, input_index: from the transaction
+ *       sha_*: the five precomputed hashes, in BIP-341's own naming
+ *  Out: hash: 32-byte signature hash
+ */
+void bip341_sighash(uint8_t hash_type, uint32_t version, uint32_t lock_time,
+                    const uint8_t sha_prevouts[32],
+                    const uint8_t sha_amounts[32],
+                    const uint8_t sha_scriptpubkeys[32],
+                    const uint8_t sha_sequences[32],
+                    const uint8_t sha_outputs[32], uint32_t input_index,
+                    uint8_t hash[SHA256_DIGEST_LENGTH]);
 
 /** Produce a BIP-340 signature over msg.
  *
