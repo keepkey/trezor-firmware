@@ -1,9 +1,10 @@
 /**
+ * Copyright (c) 2021 The Bitcoin ABC developers
  * Copyright (c) 2026 KeepKey
  *
  * BIP-340 Schnorr signatures over secp256k1.
  *
- * Structure follows schnorr.c (Bitcoin ABC's BCH variant), with the four
+ * Derived from schnorr.c (Bitcoin ABC's BCH variant), with the four
  * differences BIP-340 mandates: even-y selection instead of a Jacobi symbol
  * test, tagged-hash nonce derivation instead of RFC6979, an x-only public key
  * in the challenge, and negation of the private key when P has odd y.
@@ -58,6 +59,7 @@ int bip340_get_xonly_pubkey(const ecdsa_curve *curve, const uint8_t *priv_key,
   uint8_t compressed[33] = {0};
 
   if (ecdsa_get_public_key33(curve, priv_key, compressed) != 0) {
+    memzero(pub_key, BIP340_XONLY_LENGTH);
     return 1;
   }
 
@@ -106,7 +108,10 @@ int bip340_sign(const ecdsa_curve *curve, const uint8_t *priv_key,
     goto cleanup;
   }
 
-  // d = d' if has_even_y(P), else n - d'
+  // d = d' if has_even_y(P), else n - d'.
+  // bn_cnegate() leaves its result in [n, 2n), NOT reduced.  The bn_mod() is
+  // mandatory, not defensive: n is odd, so an unreduced value carries the
+  // wrong parity and any later even-y test on it silently inverts.
   bn_cnegate(compressed[0] == 0x03, &d, &curve->order);
   bn_mod(&d, &curve->order);
   bn_write_be(&d, d_bytes);
@@ -138,7 +143,7 @@ int bip340_sign(const ecdsa_curve *curve, const uint8_t *priv_key,
     goto cleanup;
   }
   bn_cnegate(bn_is_odd(&R.y), &k, &curve->order);
-  bn_mod(&k, &curve->order);
+  bn_mod(&k, &curve->order);  // see the note on the bn_cnegate() above
 
   bn_write_be(&R.x, sig);
 
@@ -184,44 +189,44 @@ int bip340_verify(const ecdsa_curve *curve,
     return 1;
   }
 
-  // s == 0 is in range per BIP-340, but only reachable by an attacker-supplied
-  // signature -- an honest signer hits it with probability 2^-256.  Rejecting
-  // it keeps us off scalar_multiply()'s undocumented zero-scalar behaviour.
-  if (bn_is_zero(&s)) {
-    return 2;
-  }
-
   // P = lift_x(pub_key): the point with that x coordinate and even y.
   // ecdsa_read_pubkey rejects x >= p and x values that are not on the curve.
   compressed[0] = 0x02;
   memcpy(compressed + 1, pub_key, BIP340_XONLY_LENGTH);
   if (!ecdsa_read_pubkey(curve, compressed, &P)) {
-    return 3;
+    return 2;
   }
 
   calc_e(curve, sig, pub_key, msg, msg_len, &e);
+  // Deviation from BIP-340, which specifies R = sG for e == 0.  The negation
+  // below would turn e == 0 into n, which point_multiply() rejects outright,
+  // so this branch only makes the rejection explicit.  Unreachable in
+  // practice: e is a hash output, so e == 0 has probability 2^-256.
   if (bn_is_zero(&e)) {
-    return 4;
+    return 3;
   }
 
-  // R = s * G - e * P
+  // R = s * G - e * P.  s == 0 is in range per BIP-340 and needs no guard:
+  // scalar_multiply() special-cases the zero scalar to the point at infinity
+  // (ecdsa.c) and point_add() returns early on an infinite left operand, so
+  // R = -eP falls out exactly as the spec requires.
   bn_subtract(&curve->order, &e, &e);
   if (scalar_multiply(curve, &s, &sG) != 0) {
-    return 5;
+    return 4;
   }
   if (point_multiply(curve, &e, &P, &R) != 0) {
-    return 6;
+    return 5;
   }
   point_add(curve, &sG, &R);
 
   if (point_is_infinity(&R)) {
-    return 7;
+    return 6;
   }
   if (bn_is_odd(&R.y)) {  // has_even_y(R)
-    return 8;
+    return 7;
   }
   if (!bn_is_equal(&r, &R.x)) {
-    return 9;
+    return 8;
   }
 
   return 0;

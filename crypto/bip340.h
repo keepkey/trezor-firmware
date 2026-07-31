@@ -1,7 +1,9 @@
 /**
+ * Copyright (c) 2021 The Bitcoin ABC developers
  * Copyright (c) 2026 KeepKey
  *
  * BIP-340 Schnorr signatures over secp256k1, as used by Taproot (BIP-341).
+ * Derived from schnorr.h.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the "Software"),
@@ -51,7 +53,7 @@ void bip340_tagged_hash(const char *tag, const uint8_t *msg, size_t msg_len,
 
 /** Derive the x-only public key for a private key.
  *
- * Returns 0 on success.
+ * Returns 0 on success.  pub_key is zeroed on failure, as with bip340_sign().
  */
 int bip340_get_xonly_pubkey(const ecdsa_curve *curve, const uint8_t *priv_key,
                             uint8_t pub_key[BIP340_XONLY_LENGTH]);
