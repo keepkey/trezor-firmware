@@ -67,6 +67,45 @@ int bip340_get_xonly_pubkey(const ecdsa_curve *curve, const uint8_t *priv_key,
   return 0;
 }
 
+int bip340_tweak_pubkey(const ecdsa_curve *curve,
+                        const uint8_t internal[BIP340_XONLY_LENGTH],
+                        uint8_t output[BIP340_XONLY_LENGTH]) {
+  uint8_t compressed[33] = {0};
+  uint8_t tweak[SHA256_DIGEST_LENGTH] = {0};
+  curve_point P = {0}, T = {0};
+  bignum256 t = {0};
+
+  // t = int(tagged_hash("TapTweak", internal)), which BIP-341 requires to be
+  // less than n.  t == 0 needs no special case: scalar_multiply() returns the
+  // point at infinity and point_add() then leaves P alone, giving Q = P as
+  // the spec says.
+  bip340_tagged_hash("TapTweak", internal, BIP340_XONLY_LENGTH, tweak);
+  bn_read_be(tweak, &t);
+  if (!bn_is_less(&t, &curve->order)) {
+    return 1;
+  }
+
+  // P = lift_x(internal).  ecdsa_read_pubkey rejects x >= p and x values that
+  // are not on the curve.
+  compressed[0] = 0x02;
+  memcpy(compressed + 1, internal, BIP340_XONLY_LENGTH);
+  if (!ecdsa_read_pubkey(curve, compressed, &P)) {
+    return 2;
+  }
+
+  // Q = P + t * G
+  if (scalar_multiply(curve, &t, &T) != 0) {
+    return 3;
+  }
+  point_add(curve, &T, &P);
+  if (point_is_infinity(&P)) {
+    return 4;
+  }
+
+  bn_write_be(&P.x, output);
+  return 0;
+}
+
 // e = int(tagged_hash("BIP0340/challenge", Rx || Px || msg)) mod n
 static void calc_e(const ecdsa_curve *curve, const uint8_t Rx[32],
                    const uint8_t Px[BIP340_XONLY_LENGTH], const uint8_t *msg,

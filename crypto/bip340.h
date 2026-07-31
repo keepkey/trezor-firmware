@@ -58,6 +58,21 @@ void bip340_tagged_hash(const char *tag, const uint8_t *msg, size_t msg_len,
 int bip340_get_xonly_pubkey(const ecdsa_curve *curve, const uint8_t *priv_key,
                             uint8_t pub_key[BIP340_XONLY_LENGTH]);
 
+/** BIP-341 taproot_tweak_pubkey with an empty merkle root.
+ *
+ * Q = lift_x(internal) + int(tagged_hash("TapTweak", internal)) * G, which is
+ * the key-path-only case every BIP-86 wallet address uses.  There is no
+ * script-tree variant here because nothing needs one yet.
+ *
+ *  In:  internal: x-only internal public key
+ *  Out: output:   x-only output public key, the P2TR witness program
+ *
+ * Returns 0 on success, nonzero on failure.
+ */
+int bip340_tweak_pubkey(const ecdsa_curve *curve,
+                        const uint8_t internal[BIP340_XONLY_LENGTH],
+                        uint8_t output[BIP340_XONLY_LENGTH]);
+
 /** Produce a BIP-340 signature over msg.
  *
  *  In:  priv_key: 32 bytes, must be in [1, n-1]
