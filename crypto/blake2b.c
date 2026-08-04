@@ -233,18 +233,9 @@ static void blake2b_compress( blake2b_state *S, const uint8_t block[BLAKE2B_BLOC
   v[14] = blake2b_IV[6] ^ S->f[0];
   v[15] = blake2b_IV[7] ^ S->f[1];
 
-  ROUND( 0 );
-  ROUND( 1 );
-  ROUND( 2 );
-  ROUND( 3 );
-  ROUND( 4 );
-  ROUND( 5 );
-  ROUND( 6 );
-  ROUND( 7 );
-  ROUND( 8 );
-  ROUND( 9 );
-  ROUND( 10 );
-  ROUND( 11 );
+  for( i = 0; i < 12; ++i ) {
+    ROUND( i );
+  }
 
   for( i = 0; i < 8; ++i ) {
     S->h[i] = S->h[i] ^ v[i] ^ v[i + 8];
