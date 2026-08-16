@@ -51,8 +51,16 @@ typedef void (*redpallas_progress_callback)(uint32_t completed, uint32_t total,
  * @param sig_out  64-byte output: R (32 bytes) || S (32 bytes), little-endian
  * @return 0 on success, non-zero on error
  */
+/*
+ * All signing entry points take the 32-byte Schnorr nonce from the caller.
+ * It is never drawn inside this library: a repeated nonce discloses the spend
+ * authorization key from any two signatures, so the entropy must come from a
+ * source the caller has health-checked. Passing unchecked bytes here defeats
+ * the signature scheme.
+ */
 int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
-                          const uint8_t* sighash, uint8_t* sig_out);
+                          const uint8_t* sighash, const uint8_t nonce[32],
+                          uint8_t* sig_out);
 
 /**
  * Sign a PCZT spend using its transaction-bound randomized verification key.
@@ -65,7 +73,7 @@ int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
  */
 int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
                                  const uint8_t* rk, const uint8_t* sighash,
-                                 uint8_t* sig_out,
+                                 const uint8_t nonce[32], uint8_t* sig_out,
                                  redpallas_progress_callback progress,
                                  void* progress_context);
 
@@ -80,7 +88,7 @@ int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
 int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
                                   const uint8_t* alpha,
                                   const uint8_t* expected_rk,
-                                  const uint8_t* sighash, uint8_t* sig_out,
+                                  const uint8_t* sighash, const uint8_t nonce[32], uint8_t* sig_out,
                                   redpallas_progress_callback progress,
                                   void* progress_context);
 

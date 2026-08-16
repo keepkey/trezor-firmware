@@ -270,19 +270,34 @@ static void redpallas_nonce_progress(uint32_t completed, uint32_t total,
 
 static int redpallas_sign_with_rsk(
     const bignum256* rsk, const uint8_t rk_bytes[32], const uint8_t* sighash,
-    uint8_t* sig_out, redpallas_progress_callback progress,
-    void* progress_context, uint32_t progress_base, uint32_t progress_span) {
+    const uint8_t nonce[32], uint8_t* sig_out,
+    redpallas_progress_callback progress, void* progress_context,
+    uint32_t progress_base, uint32_t progress_span) {
   bignum256 r, c, s;
   curve_point R_point;
   uint8_t R_bytes[32];
 
-  /* Generate random nonce r */
-  uint8_t rbuf[32];
-  random_buffer(rbuf, 32);
-  bn_read_le(rbuf, &r);
+  /* The nonce is supplied by the caller, never drawn here. A repeated nonce
+   * discloses the spend authorization key from any two signatures, so the
+   * entropy source must be one the caller has already health-checked. Drawing
+   * it internally with random_buffer() hid that requirement and silently
+   * converted a stuck-zero source into the constant nonce 1. */
+  if (!nonce) return -1;
+
+  /* Refuse an all-zero nonce outright. The previous code masked exactly this
+   * case: a stuck-at-zero generator produced r == 0, which was quietly
+   * replaced with 1, so every signature reused nonce 1 and any two of them
+   * disclosed the key. A degraded source must yield no signature, not a
+   * predictable one. Constant-time accumulate: no early exit on nonce bytes. */
+  uint8_t nonce_or = 0;
+  for (size_t i = 0; i < 32; i++) nonce_or |= nonce[i];
+  if (nonce_or == 0) return -1;
+
+  bn_read_le(nonce, &r);
   pallas_ct_mod_q(&r);
 
-  /* Ensure r is not zero without branching on the secret nonce. */
+  /* A nonce that is nonzero but congruent to zero mod q is equally unusable;
+   * keep the constant-time fixup for that reduction case only. */
   pallas_ct_scalar_replace_zero_with_one(&r);
 
   /* R = [r]G_spendauth - nonce commitment */
@@ -314,17 +329,16 @@ static int redpallas_sign_with_rsk(
   memzero(&s, sizeof(s));
   memzero(&R_point, sizeof(R_point));
   memzero(R_bytes, sizeof(R_bytes));
-  memzero(rbuf, sizeof(rbuf));
 
   return 0;
 }
 
 int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
                                  const uint8_t* rk, const uint8_t* sighash,
-                                 uint8_t* sig_out,
+                                 const uint8_t nonce[32], uint8_t* sig_out,
                                  redpallas_progress_callback progress,
                                  void* progress_context) {
-  if (!ask || !alpha || !rk || !sighash || !sig_out) return -1;
+  if (!ask || !alpha || !rk || !sighash || !nonce || !sig_out) return -1;
 
   if (!spendauth_G_initialized) {
     if (pallas_point_deserialize(pallas_spendauth_G_bytes,
@@ -343,7 +357,7 @@ int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
   pallas_ct_add_mod_q(&rsk, &alpha_scalar);
 
   const int result = redpallas_sign_with_rsk(
-      &rsk, rk, sighash, sig_out, progress, progress_context, 0, 1000);
+      &rsk, rk, sighash, nonce, sig_out, progress, progress_context, 0, 1000);
   memzero(&ask_scalar, sizeof(ask_scalar));
   memzero(&alpha_scalar, sizeof(alpha_scalar));
   memzero(&rsk, sizeof(rsk));
@@ -376,7 +390,7 @@ int redpallas_derive_rk_from_ak(const uint8_t* ak, const uint8_t* alpha,
 int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
                                   const uint8_t* alpha,
                                   const uint8_t* expected_rk,
-                                  const uint8_t* sighash, uint8_t* sig_out,
+                                  const uint8_t* sighash, const uint8_t nonce[32], uint8_t* sig_out,
                                   redpallas_progress_callback progress,
                                   void* progress_context) {
   if (!ask || !ak || !alpha || !expected_rk || !sighash || !sig_out) return -1;
@@ -397,7 +411,7 @@ int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
   bn_copy(&ask_scalar, &rsk);
   pallas_ct_add_mod_q(&rsk, &alpha_scalar);
 
-  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, sig_out,
+  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, nonce, sig_out,
                                        progress, progress_context, 100, 900);
   memzero(&ask_scalar, sizeof(ask_scalar));
   memzero(&alpha_scalar, sizeof(alpha_scalar));
@@ -407,7 +421,8 @@ int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
 }
 
 int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
-                          const uint8_t* sighash, uint8_t* sig_out) {
+                          const uint8_t* sighash, const uint8_t nonce[32],
+                          uint8_t* sig_out) {
   bignum256 ask_scalar, alpha_scalar, rsk;
   curve_point rk_point;
   uint8_t rk_bytes[32];
@@ -420,8 +435,8 @@ int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
   /* Compatibility API: without a cached ak, derive rk from secret rsk. */
   pallas_scalar_mult_spendauth(&rsk, &rk_point);
   pallas_point_serialize(&rk_point, rk_bytes);
-  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, sig_out, NULL,
-                                       NULL, 0, 1000);
+  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, nonce, sig_out,
+                                       NULL, NULL, 0, 1000);
 
   memzero(&ask_scalar, sizeof(ask_scalar));
   memzero(&alpha_scalar, sizeof(alpha_scalar));
