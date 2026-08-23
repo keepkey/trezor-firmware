@@ -39,7 +39,7 @@ typedef void (*redpallas_progress_callback)(uint32_t completed, uint32_t total,
  * Computes a re-randomized Schnorr signature over the Pallas curve:
  *   rsk = ask + alpha (mod order)        -- randomized signing key
  *   rk  = [rsk]G                         -- randomized verification key
- *   r   = random_scalar()                -- nonce
+ *   r   = H*(T || rk || sighash)        -- nonce, per the Zcash spec
  *   R   = [r]G                           -- nonce commitment
  *   c   = H("Zcash_RedPallasH", R || rk || sighash)  -- challenge (mod order)
  *   S   = r + c * rsk (mod order)        -- response
@@ -48,15 +48,27 @@ typedef void (*redpallas_progress_callback)(uint32_t completed, uint32_t total,
  * @param ask      32-byte spend authorizing key (little-endian scalar)
  * @param alpha    32-byte randomizer from PCZT (little-endian scalar)
  * @param sighash  32-byte transaction sighash (ZIP 244)
+ * @param T        EXACTLY 80 bytes of caller-supplied randomness. NOT a nonce
+ *                 and NOT 32 bytes -- see the contract below.
  * @param sig_out  64-byte output: R (32 bytes) || S (32 bytes), little-endian
  * @return 0 on success, non-zero on error
  */
 /*
- * All signing entry points take the 32-byte Schnorr nonce from the caller.
- * It is never drawn inside this library: a repeated nonce discloses the spend
- * authorization key from any two signatures, so the entropy must come from a
- * source the caller has health-checked. Passing unchecked bytes here defeats
- * the signature scheme.
+ * THE T PARAMETER IS 80 BYTES. Every signing entry point declares it as
+ * const uint8_t T[80], which C silently decays to a plain pointer -- the
+ * compiler will NOT catch a caller that passes a 32-byte buffer, and the
+ * signer reads 80 bytes regardless. Passing less is a 48-byte over-read.
+ *
+ * T is the randomness input to the RedDSA nonce derivation, not the nonce
+ * itself. The signer computes r = H*(T || rk || M) rather than reducing T
+ * directly, which is what makes a repeated T survivable: two signatures over
+ * different messages get different nonces because M is inside the hash.
+ *
+ * The library never draws T itself. A repeated NONCE discloses the spend
+ * authorization key from any two signatures, so T must come from a source the
+ * caller has health-checked, and a degraded source must yield no signature at
+ * all rather than a predictable one. Passing unchecked bytes here defeats the
+ * signature scheme.
  */
 int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
                           const uint8_t* sighash, const uint8_t T[80],

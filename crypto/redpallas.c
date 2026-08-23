@@ -265,7 +265,14 @@ static void redpallas_hash_nonce(const uint8_t T[80],
 
   pallas_from_uniform_bytes(hash_out, r);
 
+  /* blake2b_Final() wipes its own scratch buffer but leaves the finished state
+   * in ctx: h[0..7] IS the 64-byte digest it just serialized, and buf still
+   * holds the last input block, which here contains T. Recovering either one
+   * recovers r, and r plus the emitted signature gives up the randomized
+   * signing key by rsk = (s - r) / c. The context is secret material, so it is
+   * wiped like any other. */
   memzero(hash_out, sizeof(hash_out));
+  memzero(&ctx, sizeof(ctx));
 }
 
 static void redpallas_hash_challenge(const uint8_t R_bytes[32],
@@ -283,7 +290,10 @@ static void redpallas_hash_challenge(const uint8_t R_bytes[32],
   /* Wide reduction matching orchard crate's from_uniform_bytes */
   pallas_from_uniform_bytes(hash_out, c);
 
+  /* Public inputs, so this is uniformity rather than a leak -- but a crypto
+   * context left populated should never be the house style. */
   memzero(hash_out, sizeof(hash_out));
+  memzero(&ctx, sizeof(ctx));
 }
 
 typedef struct {
