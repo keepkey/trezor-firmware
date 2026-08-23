@@ -64,18 +64,6 @@ static void multiply_secret(const bignum256* input, curve_point* result) {
   memset(&scalar, 0, sizeof(scalar));
 }
 
-static void normalize_secret(const bignum256* input) {
-  bignum256 scalar = *input;
-#if VALGRIND
-  VALGRIND_MAKE_MEM_UNDEFINED(&scalar, sizeof(scalar));
-#endif
-  pallas_ct_scalar_replace_zero_with_one(&scalar);
-#if VALGRIND
-  VALGRIND_MAKE_MEM_DEFINED(&scalar, sizeof(scalar));
-#endif
-  memset(&scalar, 0, sizeof(scalar));
-}
-
 int main(void) {
   const bignum256 scalars[] = {
       {{0}},
@@ -97,7 +85,6 @@ int main(void) {
 #endif
 
   for (i = 0; i < sizeof(scalars) / sizeof(scalars[0]); ++i) {
-    normalize_secret(&scalars[i]);
     multiply_secret(&scalars[i], &result);
   }
 
