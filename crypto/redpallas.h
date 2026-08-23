@@ -59,7 +59,7 @@ typedef void (*redpallas_progress_callback)(uint32_t completed, uint32_t total,
  * the signature scheme.
  */
 int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
-                          const uint8_t* sighash, const uint8_t nonce[32],
+                          const uint8_t* sighash, const uint8_t T[80],
                           uint8_t* sig_out);
 
 /**
@@ -73,7 +73,7 @@ int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
  */
 int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
                                  const uint8_t* rk, const uint8_t* sighash,
-                                 const uint8_t nonce[32], uint8_t* sig_out,
+                                 const uint8_t T[80], uint8_t* sig_out,
                                  redpallas_progress_callback progress,
                                  void* progress_context);
 
@@ -88,7 +88,7 @@ int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
 int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
                                   const uint8_t* alpha,
                                   const uint8_t* expected_rk,
-                                  const uint8_t* sighash, const uint8_t nonce[32], uint8_t* sig_out,
+                                  const uint8_t* sighash, const uint8_t T[80], uint8_t* sig_out,
                                   redpallas_progress_callback progress,
                                   void* progress_context);
 
