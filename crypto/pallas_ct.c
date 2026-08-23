@@ -91,13 +91,6 @@ static uint32_t ct_u32_is_zero(uint32_t value) {
   return ((value | (0u - value)) >> 31) ^ 1u;
 }
 
-/* Keep this materialization out of its caller so ARM emits arithmetic rather
- * than a secret-conditioned IT block for the zero-nonce normalization. */
-__attribute__((noinline)) static uint32_t ct_secret_u32_is_zero(
-    uint32_t value) {
-  return ((value | (0u - value)) >> 31) ^ 1u;
-}
-
 static uint32_t ct_fe_is_zero(const ct_fe* a) {
   uint32_t diff = 0;
   for (size_t i = 0; i < CT_LIMBS; i++) {
