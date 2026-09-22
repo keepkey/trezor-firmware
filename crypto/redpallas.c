@@ -236,6 +236,45 @@ static void pallas_from_uniform_bytes(const uint8_t input[64], bignum256* out) {
  * H = BLAKE2b-512("Zcash_RedPallasH", R_bytes || rk_bytes || sighash)
  * Reduced to a scalar mod order using wide reduction (from_uniform_bytes).
  */
+/* r = H^star(T || rk || M) -- the RedDSA nonce construction from the Zcash
+ * protocol specification, section "RedDSA, RedJubjub, and RedPallas".
+ *
+ * The randomness T is HASHED TOGETHER WITH the verification key and the
+ * message; it is never used as the scalar directly. That is what makes the
+ * scheme survive a repeating entropy source: two signatures over DIFFERENT
+ * messages get different nonces even when T repeats, because M is inside the
+ * hash. Reducing raw entropy straight to a scalar has no such property -- one
+ * repeated draw across two messages discloses the signing key.
+ *
+ * T is 80 bytes, per the spec, and the digest is reduced WIDE (64 bytes ->
+ * scalar). Both matter: reducing 32 bytes mod q leaves each residue with 3 or 4
+ * preimages, a 33% bias, which is precisely the input lattice/HNP attacks need.
+ * The 64-byte wide reduction makes that bias negligible.
+ */
+static void redpallas_hash_nonce(const uint8_t T[80],
+                                 const uint8_t rk_bytes[32],
+                                 const uint8_t sighash[32], bignum256* r) {
+  uint8_t hash_out[64];
+  BLAKE2B_CTX ctx;
+
+  blake2b_InitPersonal(&ctx, 64, "Zcash_RedPallasH", 16);
+  blake2b_Update(&ctx, T, 80);
+  blake2b_Update(&ctx, rk_bytes, 32);
+  blake2b_Update(&ctx, sighash, 32);
+  blake2b_Final(&ctx, hash_out, 64);
+
+  pallas_from_uniform_bytes(hash_out, r);
+
+  /* blake2b_Final() wipes its own scratch buffer but leaves the finished state
+   * in ctx: h[0..7] IS the 64-byte digest it just serialized, and buf still
+   * holds the last input block, which here contains T. Recovering either one
+   * recovers r, and r plus the emitted signature gives up the randomized
+   * signing key by rsk = (s - r) / c. The context is secret material, so it is
+   * wiped like any other. */
+  memzero(hash_out, sizeof(hash_out));
+  memzero(&ctx, sizeof(ctx));
+}
+
 static void redpallas_hash_challenge(const uint8_t R_bytes[32],
                                      const uint8_t rk_bytes[32],
                                      const uint8_t sighash[32], bignum256* c) {
@@ -251,7 +290,10 @@ static void redpallas_hash_challenge(const uint8_t R_bytes[32],
   /* Wide reduction matching orchard crate's from_uniform_bytes */
   pallas_from_uniform_bytes(hash_out, c);
 
+  /* Public inputs, so this is uniformity rather than a leak -- but a crypto
+   * context left populated should never be the house style. */
   memzero(hash_out, sizeof(hash_out));
+  memzero(&ctx, sizeof(ctx));
 }
 
 typedef struct {
@@ -270,20 +312,39 @@ static void redpallas_nonce_progress(uint32_t completed, uint32_t total,
 
 static int redpallas_sign_with_rsk(
     const bignum256* rsk, const uint8_t rk_bytes[32], const uint8_t* sighash,
-    uint8_t* sig_out, redpallas_progress_callback progress,
-    void* progress_context, uint32_t progress_base, uint32_t progress_span) {
+    const uint8_t T[80], uint8_t* sig_out,
+    redpallas_progress_callback progress, void* progress_context,
+    uint32_t progress_base, uint32_t progress_span) {
   bignum256 r, c, s;
   curve_point R_point;
   uint8_t R_bytes[32];
 
-  /* Generate random nonce r */
-  uint8_t rbuf[32];
-  random_buffer(rbuf, 32);
-  bn_read_le(rbuf, &r);
-  pallas_ct_mod_q(&r);
+  /* T is supplied by the caller, never drawn here, so the caller can take it
+   * from a health-checked source and refuse to sign when that source fails.
+   * See redpallas_hash_nonce() for why T is hashed rather than used directly.
+   */
+  if (!T) return -1;
 
-  /* Ensure r is not zero without branching on the secret nonce. */
-  pallas_ct_scalar_replace_zero_with_one(&r);
+  /* An all-zero T means a dead entropy source. Refuse; never substitute a
+   * usable value. The predecessor of this code reduced raw bytes and then
+   * replaced a zero scalar with 1, so a stuck-at-zero source produced the
+   * CONSTANT nonce 1 on every signature -- and a nonce that is both reused and
+   * publicly known discloses the signing key from a single signature.
+   * Constant-time accumulate: no early exit on the value of T. */
+  uint8_t t_or = 0;
+  for (size_t i = 0; i < 80; i++) t_or |= T[i];
+  if (t_or == 0) return -1;
+
+  redpallas_hash_nonce(T, rk_bytes, sighash, &r);
+
+  /* A zero nonce is unusable: R would be the identity and s would reveal the
+   * key. With a 64-byte wide reduction this is negligible rather than
+   * impossible, so FAIL rather than normalise. Normalising is what turned a
+   * broken entropy source into a predictable nonce before. */
+  if (bn_is_zero(&r)) {
+    memzero(&r, sizeof(r));
+    return -1;
+  }
 
   /* R = [r]G_spendauth - nonce commitment */
   if (progress) {
@@ -314,17 +375,16 @@ static int redpallas_sign_with_rsk(
   memzero(&s, sizeof(s));
   memzero(&R_point, sizeof(R_point));
   memzero(R_bytes, sizeof(R_bytes));
-  memzero(rbuf, sizeof(rbuf));
 
   return 0;
 }
 
 int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
                                  const uint8_t* rk, const uint8_t* sighash,
-                                 uint8_t* sig_out,
+                                 const uint8_t T[80], uint8_t* sig_out,
                                  redpallas_progress_callback progress,
                                  void* progress_context) {
-  if (!ask || !alpha || !rk || !sighash || !sig_out) return -1;
+  if (!ask || !alpha || !rk || !sighash || !T || !sig_out) return -1;
 
   if (!spendauth_G_initialized) {
     if (pallas_point_deserialize(pallas_spendauth_G_bytes,
@@ -343,7 +403,7 @@ int redpallas_sign_digest_for_rk(const uint8_t* ask, const uint8_t* alpha,
   pallas_ct_add_mod_q(&rsk, &alpha_scalar);
 
   const int result = redpallas_sign_with_rsk(
-      &rsk, rk, sighash, sig_out, progress, progress_context, 0, 1000);
+      &rsk, rk, sighash, T, sig_out, progress, progress_context, 0, 1000);
   memzero(&ask_scalar, sizeof(ask_scalar));
   memzero(&alpha_scalar, sizeof(alpha_scalar));
   memzero(&rsk, sizeof(rsk));
@@ -376,7 +436,7 @@ int redpallas_derive_rk_from_ak(const uint8_t* ak, const uint8_t* alpha,
 int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
                                   const uint8_t* alpha,
                                   const uint8_t* expected_rk,
-                                  const uint8_t* sighash, uint8_t* sig_out,
+                                  const uint8_t* sighash, const uint8_t T[80], uint8_t* sig_out,
                                   redpallas_progress_callback progress,
                                   void* progress_context) {
   if (!ask || !ak || !alpha || !expected_rk || !sighash || !sig_out) return -1;
@@ -397,7 +457,7 @@ int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
   bn_copy(&ask_scalar, &rsk);
   pallas_ct_add_mod_q(&rsk, &alpha_scalar);
 
-  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, sig_out,
+  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, T, sig_out,
                                        progress, progress_context, 100, 900);
   memzero(&ask_scalar, sizeof(ask_scalar));
   memzero(&alpha_scalar, sizeof(alpha_scalar));
@@ -407,7 +467,8 @@ int redpallas_sign_digest_with_ak(const uint8_t* ask, const uint8_t* ak,
 }
 
 int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
-                          const uint8_t* sighash, uint8_t* sig_out) {
+                          const uint8_t* sighash, const uint8_t T[80],
+                          uint8_t* sig_out) {
   bignum256 ask_scalar, alpha_scalar, rsk;
   curve_point rk_point;
   uint8_t rk_bytes[32];
@@ -420,8 +481,8 @@ int redpallas_sign_digest(const uint8_t* ask, const uint8_t* alpha,
   /* Compatibility API: without a cached ak, derive rk from secret rsk. */
   pallas_scalar_mult_spendauth(&rsk, &rk_point);
   pallas_point_serialize(&rk_point, rk_bytes);
-  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, sig_out, NULL,
-                                       NULL, 0, 1000);
+  int result = redpallas_sign_with_rsk(&rsk, rk_bytes, sighash, T, sig_out,
+                                       NULL, NULL, 0, 1000);
 
   memzero(&ask_scalar, sizeof(ask_scalar));
   memzero(&alpha_scalar, sizeof(alpha_scalar));

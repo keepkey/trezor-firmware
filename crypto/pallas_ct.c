@@ -91,13 +91,6 @@ static uint32_t ct_u32_is_zero(uint32_t value) {
   return ((value | (0u - value)) >> 31) ^ 1u;
 }
 
-/* Keep this materialization out of its caller so ARM emits arithmetic rather
- * than a secret-conditioned IT block for the zero-nonce normalization. */
-__attribute__((noinline)) static uint32_t ct_secret_u32_is_zero(
-    uint32_t value) {
-  return ((value | (0u - value)) >> 31) ^ 1u;
-}
-
 static uint32_t ct_fe_is_zero(const ct_fe* a) {
   uint32_t diff = 0;
   for (size_t i = 0; i < CT_LIMBS; i++) {
@@ -590,12 +583,4 @@ void pallas_ct_mod_q(bignum256* x) {
   ct_fe_from_bn(&value, x, &CT_Q);
   ct_fe_to_bn(x, &value, &CT_Q);
   memzero(&value, sizeof(value));
-}
-
-void pallas_ct_scalar_replace_zero_with_one(bignum256* scalar) {
-  uint32_t nonzero = 0;
-  for (size_t i = 0; i < BN_LIMBS; i++) {
-    nonzero |= scalar->val[i];
-  }
-  scalar->val[0] |= ct_secret_u32_is_zero(nonzero);
 }

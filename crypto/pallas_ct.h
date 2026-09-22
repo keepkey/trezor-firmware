@@ -29,7 +29,6 @@ void pallas_ct_mod_p(bignum256* x);
 void pallas_ct_mul_mod_q(bignum256* x, const bignum256* k);
 void pallas_ct_add_mod_q(bignum256* a, const bignum256* b);
 void pallas_ct_mod_q(bignum256* x);
-void pallas_ct_scalar_replace_zero_with_one(bignum256* scalar);
 
 void pallas_ct_point_add(const curve_point* p, const curve_point* q,
                          curve_point* res);
