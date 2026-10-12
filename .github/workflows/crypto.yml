@@ -40,16 +40,18 @@ jobs:
         working-directory: crypto
         run: |
           make clean
-          make VALGRIND=0 tests/test_check tests/test_pallas_ct
+          make VALGRIND=0 tests/test_check tests/test_pallas_ct tests/test_redpallas_nonce
           ./tests/test_check
           ./tests/test_pallas_ct
+          ./tests/test_redpallas_nonce
 
       - name: Verify Pallas secret flow with Valgrind
         working-directory: crypto
         run: |
           make clean
-          make VALGRIND=1 OPTFLAGS='-O2 -g' tests/test_pallas_ct
+          make VALGRIND=1 OPTFLAGS='-O2 -g' tests/test_pallas_ct tests/test_redpallas_nonce
           valgrind --quiet --error-exitcode=1 --track-origins=yes ./tests/test_pallas_ct
+          valgrind --quiet --error-exitcode=1 --track-origins=yes ./tests/test_redpallas_nonce
 
       - name: Run ASan and UBSan suite
         working-directory: crypto
@@ -57,9 +59,11 @@ jobs:
           make clean
           make CC='gcc -fsanitize=address,undefined' VALGRIND=0 \
             OPTFLAGS='-O1 -g -fno-omit-frame-pointer' \
-            tests/test_check tests/test_pallas_ct
+            tests/test_check tests/test_pallas_ct tests/test_redpallas_nonce
           CK_DEFAULT_TIMEOUT=30 \
             ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
             UBSAN_OPTIONS=halt_on_error=1 ./tests/test_check
           ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
             UBSAN_OPTIONS=halt_on_error=1 ./tests/test_pallas_ct
+          ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 ./tests/test_redpallas_nonce

@@ -204,6 +204,8 @@ static const uint8_t two_256_mod_q[32] = {
  *   result = (lo + hi * 2^256) mod q
  *
  * where lo = input[0..31] and hi = input[32..63], both little-endian.
+ * Nonce hashes reach this helper with secret material, so every reduction
+ * and combination must use the fixed-schedule Pallas primitives.
  *
  * This MUST be used instead of simple truncation (taking low 256 bits)
  * because the orchard crate verifies against from_uniform_bytes — the
@@ -213,19 +215,19 @@ static void pallas_from_uniform_bytes(const uint8_t input[64], bignum256* out) {
   bignum256 lo, hi, t256;
 
   bn_read_le(input, &lo);
-  pallas_mod_q(&lo);
+  pallas_ct_mod_q(&lo);
 
   bn_read_le(input + 32, &hi);
-  pallas_mod_q(&hi);
+  pallas_ct_mod_q(&hi);
 
   bn_read_le(two_256_mod_q, &t256);
 
   /* out = hi * (2^256 mod q) mod q */
   bn_copy(&hi, out);
-  pallas_mul_mod_q(out, &t256);
+  pallas_ct_mul_mod_q(out, &t256);
 
   /* out = out + lo mod q */
-  pallas_add_mod_q(out, &lo);
+  pallas_ct_add_mod_q(out, &lo);
 
   memzero(&lo, sizeof(lo));
   memzero(&hi, sizeof(hi));
