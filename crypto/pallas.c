@@ -108,7 +108,7 @@ const ecdsa_curve pallas = {
     {/*.val =*/{5}}
 #if USE_PRECOMPUTED_CP
     ,
-    {{{{0}}}}
+    {{{{{0}}, {{0}}}}}
 #endif
 };
 
