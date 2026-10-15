@@ -35,6 +35,12 @@ int main(void) {
       fprintf(stderr, "nonce reduction vector %zu failed\n", i);
       return 1;
     }
+    /* Zero counts mean the variable-time helpers ran: equal schedules alone
+     * would still match. */
+    if (counts.field_mul == 0) {
+      fprintf(stderr, "nonce reduction bypassed fixed-schedule arithmetic\n");
+      return 1;
+    }
     if (i == 0) baseline = counts;
     if (memcmp(&baseline, &counts, sizeof(counts)) != 0) {
       fprintf(stderr, "nonce reduction schedule changed at vector %zu\n", i);

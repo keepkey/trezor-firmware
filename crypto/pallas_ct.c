@@ -151,6 +151,8 @@ static void ct_fe_add_mod(ct_fe* out, const ct_fe* a, const ct_fe* b,
   ct_add_raw(&sum, a, b);
   const uint32_t borrow = ct_sub_raw(&reduced, &sum, &mod->modulus);
   ct_fe_select(out, &reduced, &sum, borrow);
+  memzero(&sum, sizeof(sum));
+  memzero(&reduced, sizeof(reduced));
 }
 
 static void ct_fe_sub_mod(ct_fe* out, const ct_fe* a, const ct_fe* b,
@@ -161,6 +163,8 @@ static void ct_fe_sub_mod(ct_fe* out, const ct_fe* a, const ct_fe* b,
   const uint32_t borrow = ct_sub_raw(&diff, a, b);
   ct_add_raw(&corrected, &diff, &mod->modulus);
   ct_fe_select(out, &diff, &corrected, borrow);
+  memzero(&diff, sizeof(diff));
+  memzero(&corrected, sizeof(corrected));
 }
 
 /* Return one public-indexed 16-bit half-limb. */
@@ -576,6 +580,9 @@ void pallas_ct_add_mod_q(bignum256* a, const bignum256* b) {
   ct_fe_from_bn(&rhs, b, &CT_Q);
   ct_fe_add_mod(&result, &lhs, &rhs, &CT_Q);
   ct_fe_to_bn(a, &result, &CT_Q);
+  memzero(&lhs, sizeof(lhs));
+  memzero(&rhs, sizeof(rhs));
+  memzero(&result, sizeof(result));
 }
 
 void pallas_ct_mod_q(bignum256* x) {
